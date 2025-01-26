@@ -1,4 +1,4 @@
-use super::Task;
+use super::InnerTask;
 use super::TaskHeader;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -6,13 +6,13 @@ use std::task::{Context, Poll, Waker};
 use std::ptr::NonNull;
 
 pub struct RawTaskHandle<T: Future + Send + Sync + 'static> {
-    ptr: NonNull<Task<T>>,
+    ptr: NonNull<InnerTask<T>>,
 }
 
 impl<T: Future + Send + Sync + 'static> RawTaskHandle<T> {
     pub(crate) fn from_ptr(ptr: NonNull<TaskHeader>) -> RawTaskHandle<T> {
         RawTaskHandle {
-            ptr: ptr.cast::<Task<T>>(),
+            ptr: ptr.cast::<InnerTask<T>>(),
         }
     }
 
@@ -35,12 +35,16 @@ impl<T: Future + Send + Sync + 'static> RawTaskHandle<T> {
         // Safety: this will be accessed from one thread
         let future = unsafe { task.get_future().get_mut() };
 
-        // TODO: make actual wakers
-        let waker = Waker::noop();
-        let mut cx = Context::from_waker(waker);
+        let mut cx = Context::from_waker(task.waker());
 
         // Safety: `Future`s are !Unpin.
         let pin_future = unsafe { Pin::new_unchecked(future) };
         task.change_poll(pin_future.poll(&mut cx));
+    }
+
+    pub(crate) fn attach_waker(&self, waker: &Waker) {
+        let task = unsafe { self.ptr.as_ref() };
+
+        task.change_waker(waker);
     }
 }

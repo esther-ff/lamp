@@ -1,27 +1,36 @@
 use super::MutCell;
+use super::Notification;
 use super::Vtable;
+
 use crate::task::RawTask;
 
-use futures::task::{self, ArcWake};
 use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::sync::{Arc, mpsc};
+use std::task::{Poll, Waker};
 
-// temp. UpperTask
-pub struct UpperTask {
+pub struct Task {
     pub(crate) raw: RawTask,
 }
 
-impl UpperTask {
-    pub(crate) fn new<F: Future + Send + Sync + 'static>(future: F) -> UpperTask {
-        UpperTask {
-            raw: RawTask::new(future),
-        }
+impl Task {
+    pub(crate) fn new<F: Future + Send + Sync + 'static>(
+        future: F,
+        chan: mpsc::Sender<Arc<Notification>>,
+    ) -> (Task, Notification) {
+        let raw = RawTask::new(future);
+        let task = Task { raw: raw.clone() };
+
+        let notif = Notification::new(Task { raw }, chan);
+
+        (task, notif)
     }
 
     pub(crate) fn poll(&self) {
         self.raw.poll();
+    }
+
+    pub(crate) fn attach_waker(&self, waker: &Waker) {
+        self.raw.attach_waker(waker);
     }
 }
 
@@ -38,20 +47,8 @@ impl Core {
     }
 }
 
-// RuntimeMessage
-pub enum RuntimeMessage {
-    TaskDone(u64),
-    Pending(u64),
-}
-
-impl ArcWake for RuntimeMessage {
-    fn wake_by_ref(arc_self: &Arc<RuntimeMessage>) {
-        // Somehow notify runtime
-    }
-}
-
 // Task
-pub struct Task<T: Future + 'static + Send + Sync> {
+pub struct InnerTask<T: Future + 'static + Send + Sync> {
     core: Core,
     future: MutCell<T>,
     waker: MutCell<Waker>,
@@ -60,9 +57,9 @@ pub struct Task<T: Future + 'static + Send + Sync> {
     _dst: PhantomData<()>,
 }
 
-impl<F: Future + 'static + Send + Sync> Task<F> {
-    pub(crate) fn new(future: F, id: u64) -> Task<F> {
-        Task {
+impl<F: Future + 'static + Send + Sync> InnerTask<F> {
+    pub(crate) fn new(future: F, id: u64) -> InnerTask<F> {
+        InnerTask {
             future: unsafe { MutCell::new(future) },
             core: Core::new::<F>(),
             waker: unsafe { MutCell::new(Waker::noop().clone()) },
@@ -81,13 +78,19 @@ impl<F: Future + 'static + Send + Sync> Task<F> {
         &self.future
     }
 
+    pub(crate) fn waker(&self) -> &Waker {
+        self.waker.get()
+    }
+
     pub(crate) fn change_poll(&self, poll: Poll<F::Output>) {
         // Safety: accessed from one thread.
         *unsafe { self.poll.get_mut() } = poll;
     }
 
     pub(crate) fn change_waker(&self, waker: &Waker) {
+        println!("Waker change fn");
         if !waker.will_wake(&self.waker) {
+            println!("Changed waker!");
             unsafe { *self.waker.get_mut() = waker.clone() }
         }
     }

@@ -1,14 +1,14 @@
 use crate::task::RawTaskHandle;
-use crate::task::Task;
 use crate::task::TaskHeader;
 use std::future::Future;
 use std::ptr::NonNull;
-use std::task::Poll;
+use std::task::{Poll, Waker};
 
 pub struct Vtable {
     pub poll: fn(NonNull<TaskHeader>),
     pub schedule: fn(NonNull<TaskHeader>),
     pub read_output: fn(NonNull<TaskHeader>, *mut ()),
+    pub attach_waker: fn(NonNull<TaskHeader>, &Waker),
 }
 
 impl Vtable {
@@ -17,6 +17,7 @@ impl Vtable {
             poll: poll::<F>,
             read_output: read_output::<F>,
             schedule,
+            attach_waker: attach_waker::<F>,
         }
     }
 }
@@ -40,4 +41,11 @@ fn read_output<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, ptr1
 
     handle.read_output(dst);
 }
+
+fn attach_waker<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, waker: &Waker) {
+    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
+
+    handle.attach_waker(waker)
+}
+
 fn schedule(ptr: NonNull<TaskHeader>) {}
