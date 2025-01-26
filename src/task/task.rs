@@ -26,6 +26,7 @@ impl Task {
     }
 
     pub(crate) fn poll(&self) {
+        println!("[TASK] polled task!");
         self.raw.poll();
     }
 
@@ -88,9 +89,8 @@ impl<F: Future + 'static + Send + Sync> InnerTask<F> {
     }
 
     pub(crate) fn change_waker(&self, waker: &Waker) {
-        println!("Waker change fn");
         if !waker.will_wake(&self.waker) {
-            println!("Changed waker!");
+            println!("[TASK] changed waker!");
             unsafe { *self.waker.get_mut() = waker.clone() }
         }
     }

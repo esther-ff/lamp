@@ -26,14 +26,14 @@ unsafe fn drop(data: *const ()) {
 
 // Wake through the waker
 unsafe fn wake(data: *const ()) {
-    println!("Wake called!");
+    println!("[WAKER] wake called!");
     let arc = unsafe { Arc::from_raw(data as *const Notification) };
     arc.send();
 }
 
 // Wake by reference using the waker
 unsafe fn wake_by_ref(data: *const ()) {
-    println!("Wake by ref called!");
+    println!("[WAKER] wake by ref called!");
     let arc = unsafe { Arc::from_raw(data as *const Notification) };
     let clone = Arc::clone(&arc);
     clone.send();
