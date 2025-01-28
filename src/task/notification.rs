@@ -22,3 +22,9 @@ impl Notification {
 
 unsafe impl Send for Notification {}
 unsafe impl Sync for Notification {}
+
+impl std::ops::Drop for Notification {
+    fn drop(&mut self) {
+        println!("[NOTIF] dropped notification")
+    }
+}

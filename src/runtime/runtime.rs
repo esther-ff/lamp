@@ -60,14 +60,16 @@ impl Runtime {
     where
         F: Future + Send + Sync + 'static,
     {
-        println!("[RUNTIME] spawned task!");
         let sender = &Runtime::get().sender;
-        let (mut task, notif) = Task::new(future, sender.clone());
+        let (task, notif) = Task::new(future, sender.clone());
         let arc_notif = Arc::new(notif);
-        let a = make_waker(arc_notif.clone());
-        drop(a);
-        task.set_waker(&make_waker(arc_notif.clone()));
-        println!("[RUNTIME] sending task to channel!");
+
+        let waker = make_waker(arc_notif.clone());
+        task.attach_waker(&waker.clone());
+
+        {
+            task;
+        }
         sender.send(arc_notif).expect("failed send");
     }
 }

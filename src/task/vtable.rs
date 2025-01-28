@@ -2,18 +2,15 @@ use crate::task::RawTaskHandle;
 use crate::task::TaskHeader;
 use std::future::Future;
 use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
 use std::task::{Poll, Waker};
 
 pub struct Vtable {
     pub poll: fn(NonNull<TaskHeader>),
-    pub wake_up_handle: fn(NonNull<TaskHeader>),
-    pub attach_handle_waker: fn(NonNull<TaskHeader>, &Waker),
     pub read_output: fn(NonNull<TaskHeader>, *mut ()),
-    pub set_waker: fn(NonNull<TaskHeader>, &Waker),
-    pub ref_increase: fn(NonNull<TaskHeader>) -> u8,
-    pub ref_decrease: fn(NonNull<TaskHeader>) -> u8,
-    pub deallocate: fn(NonNull<TaskHeader>),
+    pub attach_waker: fn(NonNull<TaskHeader>, &Waker),
+    pub ref_dec: fn(NonNull<TaskHeader>) -> u8,
+    pub ref_inc: fn(NonNull<TaskHeader>) -> u8,
+    pub dealloc: fn(NonNull<TaskHeader>),
 }
 
 impl Vtable {
@@ -21,12 +18,10 @@ impl Vtable {
         Vtable {
             poll: poll::<F>,
             read_output: read_output::<F>,
-            attach_handle_waker: attach_handle_waker::<F>,
-            wake_up_handle: wake_up_handle::<F>,
-            set_waker: set_waker::<F>,
-            ref_increase,
-            ref_decrease,
-            deallocate,
+            attach_waker: attach_waker::<F>,
+            ref_dec: ref_dec::<F>,
+            ref_inc: ref_inc::<F>,
+            dealloc: dealloc::<F>,
         }
     }
 }
@@ -44,37 +39,28 @@ fn read_output<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, ptr1
     handle.read_output(dst);
 }
 
-fn set_waker<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, waker: &Waker) {
-    let mut handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
+fn attach_waker<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, waker: &Waker) {
+    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
 
     handle.attach_waker(waker)
 }
 
-fn wake_up_handle<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) {
+fn ref_dec<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) -> u8 {
     let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
 
-    handle.wake_up_handle();
+    unsafe { (*handle.get_task()).ref_dec() }
 }
 
-fn attach_handle_waker<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, waker: &Waker) {
+fn ref_inc<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) -> u8 {
     let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
 
-    handle.attach_handle_waker(waker)
+    unsafe { (*handle.get_task()).ref_inc() }
 }
 
-fn ref_increase(ptr: NonNull<TaskHeader>) -> u8 {
-    let header = unsafe { ptr.as_ref() };
-    header.count.fetch_add(1, Ordering::SeqCst)
+fn dealloc<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) {
+    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
+
+    handle.dealloc()
 }
 
-fn ref_decrease(ptr: NonNull<TaskHeader>) -> u8 {
-    let header = unsafe { ptr.as_ref() };
-    header.count.fetch_sub(1, Ordering::SeqCst)
-}
-
-// Deallocate the pointer
-// Only use if the ref count is 0
-fn deallocate(mut ptr: NonNull<TaskHeader>) {
-    let mut_ptr = unsafe { ptr.as_mut() };
-    drop(unsafe { Box::from_raw(mut_ptr) })
-}
+fn schedule(_ptr: NonNull<TaskHeader>) {}

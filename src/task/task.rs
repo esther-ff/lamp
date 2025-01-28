@@ -4,8 +4,7 @@ use super::Vtable;
 
 use crate::task::RawTask;
 
-use std::marker::PhantomData;
-use std::sync::{Arc, atomic::AtomicU8, mpsc};
+use std::sync::{Arc, atomic, mpsc};
 use std::task::{Poll, Waker};
 
 pub struct Task {
@@ -18,7 +17,7 @@ impl Task {
         chan: mpsc::Sender<Arc<Notification>>,
     ) -> (Task, Notification) {
         let raw = RawTask::new(future);
-        let task = Task { raw: raw.clone() };
+        let task = Task { raw };
 
         let notif = Notification::new(Task { raw }, chan);
 
@@ -30,22 +29,29 @@ impl Task {
         self.raw.poll();
     }
 
-    pub(crate) fn set_waker(&self, waker: &Waker) {
-        self.raw.set_waker(waker);
+    pub(crate) fn attach_waker(&self, waker: &Waker) {
+        self.raw.attach_waker(waker);
+    }
+}
+
+impl std::ops::Drop for Task {
+    fn drop(&mut self) {
+        if self.raw.ref_dec() == 0 {
+            println!("[TASK] dropped task");
+            self.raw.dealloc();
+        }
     }
 }
 
 // CORE
 pub struct Core {
     vtable: Vtable,
-    handle_waker: MutCell<Waker>,
 }
 
 impl Core {
     pub fn new<F: Future + 'static + Send + Sync>() -> Core {
         Core {
             vtable: Vtable::new::<F>(),
-            handle_waker: unsafe { MutCell::new(Waker::noop().clone()) },
         }
     }
 }
@@ -53,22 +59,26 @@ impl Core {
 // Task
 pub struct InnerTask<T: Future + 'static + Send + Sync> {
     core: Core,
-    count: AtomicU8,
+    count: atomic::AtomicU8,
     future: MutCell<T>,
-    waker: Waker,
+    waker: MutCell<Waker>,
     poll: MutCell<Poll<T::Output>>,
-    _dst: PhantomData<()>,
+}
+
+impl<T: Send + Sync + Future + 'static> std::ops::Drop for InnerTask<T> {
+    fn drop(&mut self) {
+        println!("[INNER TASK] dropped inner task");
+    }
 }
 
 impl<F: Future + 'static + Send + Sync> InnerTask<F> {
-    pub(crate) fn new(future: F, waker: Waker) -> InnerTask<F> {
+    pub(crate) fn new(future: F) -> InnerTask<F> {
         InnerTask {
             core: Core::new::<F>(),
-            count: AtomicU8::new(1),
+            count: atomic::AtomicU8::new(2),
             future: unsafe { MutCell::new(future) },
-            waker,
+            waker: unsafe { MutCell::new(Waker::noop().clone()) },
             poll: unsafe { MutCell::new(Poll::Pending) },
-            _dst: PhantomData,
         }
     }
 
@@ -81,18 +91,8 @@ impl<F: Future + 'static + Send + Sync> InnerTask<F> {
         &self.future
     }
 
-    pub(crate) fn attach_handle_waker(&self, waker: &Waker) {
-        if !waker.will_wake(&self.core.handle_waker) {
-            *unsafe { self.core.handle_waker.get_mut() } = waker.clone()
-        };
-    }
-
-    pub(crate) fn wake_up_handle(&self) {
-        self.core.handle_waker.wake_by_ref();
-    }
-
     pub(crate) fn get_waker(&self) -> &Waker {
-        &self.waker
+        self.waker.get()
     }
 
     pub(crate) fn change_poll(&self, poll: Poll<F::Output>) {
@@ -100,16 +100,24 @@ impl<F: Future + 'static + Send + Sync> InnerTask<F> {
         *unsafe { self.poll.get_mut() } = poll;
     }
 
-    pub(crate) fn set_waker(&mut self, waker: &Waker) {
-        println!("Setting waker!");
-        dbg!(&self.count);
-        self.waker = waker.clone();
-        println!("Set waker!");
+    pub(crate) fn change_waker(&self, waker: &Waker) {
+        if !waker.will_wake(&self.waker) {
+            println!("[TASK] changed waker!");
+            unsafe { *self.waker.get_mut() = waker.clone() }
+        }
+    }
+
+    // Returns the value that is now in the `AtomicU8`
+    pub(crate) fn ref_dec(&self) -> u8 {
+        self.count.fetch_sub(1, atomic::Ordering::SeqCst) - 1
+    }
+
+    pub(crate) fn ref_inc(&self) -> u8 {
+        self.count.fetch_add(1, atomic::Ordering::SeqCst) + 1
     }
 }
 pub struct TaskHeader {
     core: Core,
-    pub(crate) count: AtomicU8,
 }
 
 impl TaskHeader {
