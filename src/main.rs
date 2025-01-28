@@ -4,10 +4,8 @@ mod task;
 use crate::runtime::runtime::Runtime;
 
 use crate::task::Notification;
-use crate::task::waker::make_waker;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll};
 use task::task::Task;
 

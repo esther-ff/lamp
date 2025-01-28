@@ -8,7 +8,6 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 fn make_vtable() -> &'static RawWakerVTable {
     &RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker)
 }
-
 // VTable functions
 // Clone the Waker.
 unsafe fn clone(data: *const ()) -> RawWaker {
@@ -23,10 +22,7 @@ unsafe fn clone(data: *const ()) -> RawWaker {
 
 // Drop the waker
 unsafe fn drop_waker(data: *const ()) {
-    println!("Dropping Waker!");
-    let arc: Arc<Notification> =
-        unsafe { Arc::<Notification>::from_raw(data.cast::<Notification>()) };
-
+    let arc = unsafe { Arc::from_raw(data as *const Notification) };
     drop(arc)
 }
 

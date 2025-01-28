@@ -1,10 +1,10 @@
 use super::InnerTask;
 use super::TaskHeader;
-use std::pin::{Pin, pin};
+use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 
 use std::ptr::NonNull;
-
+#[derive(Clone, Copy)]
 pub struct RawTaskHandle<T: Future + Send + Sync + 'static> {
     ptr: NonNull<InnerTask<T>>,
 }
@@ -16,7 +16,10 @@ impl<T: Future + Send + Sync + 'static> RawTaskHandle<T> {
         }
     }
 
-    pub(crate) fn read_output(&self, dst: &mut Poll<T::Output>) {
+    pub(crate) fn get_task(self) -> *mut InnerTask<T> {
+        self.ptr.as_ptr()
+    }
+    pub(crate) fn read_output(self, dst: &mut Poll<T::Output>) {
         use std::mem;
 
         // Safety: this function will not be called concurrently.
@@ -27,7 +30,7 @@ impl<T: Future + Send + Sync + 'static> RawTaskHandle<T> {
         let _ = mem::replace(dst, output); // ignored value
     }
 
-    pub(crate) fn poll(&self) {
+    pub(crate) fn poll(self) {
         // Safety:
         //
         // The pointer dereferenced for 1,2 and 3 is valid
@@ -44,17 +47,11 @@ impl<T: Future + Send + Sync + 'static> RawTaskHandle<T> {
         };
     }
 
-    pub(crate) fn attach_waker(&mut self, waker: &Waker) {
-        unsafe { (*self.ptr.as_ptr()).set_waker(waker) }
+    pub(crate) fn attach_waker(self, waker: &Waker) {
+        unsafe { (*self.ptr.as_ptr()).change_waker(waker) };
     }
 
-    pub(crate) fn wake_up_handle(&self) {
-        unsafe { (*self.ptr.as_ptr()).wake_up_handle() };
-    }
-
-    pub(crate) fn attach_handle_waker(&self, waker: &Waker) {
-        unsafe {
-            (*self.ptr.as_ptr()).attach_handle_waker(waker);
-        }
+    pub(crate) fn dealloc(self) {
+        drop(unsafe { Box::from_raw(self.ptr.as_ptr()) })
     }
 }

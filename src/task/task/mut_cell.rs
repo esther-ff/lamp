@@ -27,15 +27,6 @@ impl<T> MutCell<T> {
         unsafe { &mut *self.data.get() }
     }
 
-    /// Change data.
-    pub unsafe fn change(&self, data: T) -> T {
-        use std::mem;
-
-        let ptr = self.data.get();
-
-        mem::replace(unsafe { &mut *ptr }, data)
-    }
-
     /// Obtains an immutable reference to the type within.
     pub fn get(&self) -> &T {
         unsafe { &*self.data.get() }

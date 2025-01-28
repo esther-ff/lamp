@@ -1,5 +1,4 @@
 pub mod task;
-pub(crate) use task::Core;
 pub(crate) use task::InnerTask;
 pub(crate) use task::Task;
 pub(crate) use task::TaskHeader;
@@ -19,5 +18,4 @@ pub(crate) use mut_cell::MutCell;
 pub mod notification;
 pub(crate) use notification::Notification;
 
-pub mod task_handle;
 pub mod waker;
