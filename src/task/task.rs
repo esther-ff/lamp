@@ -103,6 +103,8 @@ impl<F: Future + Send + 'static> Core<F> {
         &self.tail
     }
 
+    #[allow(clippy::mut_from_ref)]
+    // This will be probably changed later.
     pub(crate) fn future(&self) -> &mut F {
         unsafe { &mut *self.mid.future.get() }
     }
