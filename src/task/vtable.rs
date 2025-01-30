@@ -1,66 +1,54 @@
-use crate::task::RawTaskHandle;
-use crate::task::TaskHeader;
+use super::task::Header;
+use crate::task::mantle::Mantle;
 use std::future::Future;
 use std::ptr::NonNull;
-use std::task::{Poll, Waker};
+use std::sync::atomic::Ordering;
+use std::task::Waker;
 
-pub struct Vtable {
-    pub poll: fn(NonNull<TaskHeader>),
-    pub read_output: fn(NonNull<TaskHeader>, *mut ()),
-    pub attach_waker: fn(NonNull<TaskHeader>, &Waker),
-    pub ref_dec: fn(NonNull<TaskHeader>) -> u8,
-    pub ref_inc: fn(NonNull<TaskHeader>) -> u8,
-    pub dealloc: fn(NonNull<TaskHeader>),
+type Ptr = NonNull<Header>;
+
+pub(crate) struct Vtable {
+    pub(crate) poll: fn(Ptr) -> bool,
+    pub(crate) review: fn(Ptr, *const (), &Waker),
+    pub(crate) wake_handle: fn(Ptr),
+    pub(crate) ref_dec: fn(Ptr) -> u8,
+    pub(crate) ref_inc: fn(Ptr) -> u8,
+    pub(crate) destroy: fn(Ptr),
 }
 
-impl Vtable {
-    pub(crate) fn new<F: Future + 'static + Send + Sync>() -> Vtable {
-        Vtable {
-            poll: poll::<F>,
-            read_output: read_output::<F>,
-            attach_waker: attach_waker::<F>,
-            ref_dec: ref_dec::<F>,
-            ref_inc: ref_inc::<F>,
-            dealloc: dealloc::<F>,
-        }
+pub(crate) fn vtable<F: Future + Send + 'static>() -> &'static Vtable {
+    &Vtable {
+        poll: poll::<F>,
+        destroy: destroy::<F>,
+        review: review::<F>,
+        wake_handle: wake_handle::<F>,
+        ref_dec,
+        ref_inc,
     }
 }
 
-fn poll<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) {
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
-
-    handle.poll()
+fn poll<F: Future + Send + 'static>(ptr: Ptr) -> bool {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
+    m.poll()
 }
 
-fn read_output<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, ptr1: *mut ()) {
-    let dst = unsafe { &mut *(ptr1 as *mut Poll<F::Output>) };
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
-
-    handle.read_output(dst);
+fn destroy<F: Future + Send + 'static>(ptr: Ptr) {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
+    m.destroy();
+}
+fn review<F: Future + Send + 'static>(ptr: Ptr, dst: *const (), waker: &Waker) {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
+    m.review(dst, waker);
 }
 
-fn attach_waker<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>, waker: &Waker) {
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
+fn wake_handle<F: Future + Send + 'static>(ptr: Ptr) {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
 
-    handle.attach_waker(waker)
+    m.wake_handle();
 }
-
-fn ref_dec<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) -> u8 {
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
-
-    unsafe { (*handle.get_task()).ref_dec() }
+fn ref_dec(ptr: Ptr) -> u8 {
+    unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) }
 }
-
-fn ref_inc<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) -> u8 {
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
-
-    unsafe { (*handle.get_task()).ref_inc() }
+fn ref_inc(ptr: Ptr) -> u8 {
+    unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) }
 }
-
-fn dealloc<F: Future + Send + Sync + 'static>(ptr: NonNull<TaskHeader>) {
-    let handle: RawTaskHandle<F> = RawTaskHandle::from_ptr(ptr);
-
-    handle.dealloc()
-}
-
-fn schedule(_ptr: NonNull<TaskHeader>) {}

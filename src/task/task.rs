@@ -1,127 +1,194 @@
-use super::MutCell;
-use super::Notification;
-use super::Vtable;
+use super::handle::TaskHandle;
+use super::note::Note;
+use super::vtable::{Vtable, vtable};
 
-use crate::task::RawTask;
-
-use std::sync::{Arc, atomic, mpsc};
+use std::cell::{Cell, UnsafeCell};
+use std::future::Future;
+use std::ptr::NonNull;
+use std::sync::atomic::AtomicU8;
 use std::task::{Poll, Waker};
 
+static REF_COUNT_BASE: u8 = 2;
+
+/// Owned task struct.
 pub struct Task {
-    pub(crate) raw: RawTask,
+    raw: RawTask,
 }
 
 impl Task {
-    pub(crate) fn new<F: Future + Send + Sync + 'static>(
-        future: F,
-        chan: mpsc::Sender<Arc<Notification>>,
-    ) -> (Task, Notification) {
-        let raw = RawTask::new(future);
-        let task = Task { raw };
+    pub fn new<F: Future + Send + 'static>(f: F, id: u64) -> (Task, Note, TaskHandle<F::Output>) {
+        let raw = RawTask::new(f);
 
-        let notif = Notification::new(Task { raw }, chan);
-
-        (task, notif)
+        (Task { raw }, Note(id), TaskHandle::new(raw))
     }
 
-    pub(crate) fn poll(&self) {
-        println!("[TASK] polled task!");
-        self.raw.poll();
+    pub(crate) fn poll(&self) -> bool {
+        self.raw.poll()
     }
 
-    pub(crate) fn attach_waker(&self, waker: &Waker) {
-        self.raw.attach_waker(waker);
+    pub(crate) fn destroy(&self) {
+        self.raw.destroy()
     }
 }
 
 impl std::ops::Drop for Task {
     fn drop(&mut self) {
+        self.raw.wake_handle();
         if self.raw.ref_dec() == 0 {
-            println!("[TASK] dropped task");
-            self.raw.dealloc();
+            println!("Deallocated the pointer");
+            self.raw.destroy();
+        }
+
+        println!("Dropped task!");
+    }
+}
+
+unsafe impl Send for Task {}
+unsafe impl Sync for Task {}
+
+pub(crate) struct Header {
+    pub(crate) id: u64,
+    pub(crate) refs: AtomicU8,
+    pub(crate) vtable: &'static Vtable, // todo
+}
+
+unsafe impl Send for Header {}
+
+pub(crate) struct Middle<F: Future + Send + 'static> {
+    future: UnsafeCell<F>,
+    pub(crate) poll: UnsafeCell<Poll<F::Output>>,
+}
+
+pub(crate) struct Tail {
+    pub(crate) waker: UnsafeCell<Waker>,
+    pub(crate) h_waker: Cell<Option<Waker>>,
+}
+
+pub(crate) struct Core<F: Future + Send + 'static> {
+    head: Header,
+    mid: Middle<F>,
+    tail: Tail,
+}
+
+impl<F: Future + Send + 'static> Core<F> {
+    pub(crate) fn new(f: F, id: u64) -> Core<F> {
+        let head = Header {
+            id,
+            refs: AtomicU8::new(REF_COUNT_BASE),
+            vtable: vtable::<F>(),
+        };
+
+        let mid = Middle {
+            future: UnsafeCell::new(f),
+            poll: UnsafeCell::new(Poll::Pending),
+        };
+
+        let tail = Tail {
+            waker: UnsafeCell::new(Waker::noop().clone()),
+            h_waker: Cell::new(None),
+        };
+
+        Core { head, mid, tail }
+    }
+
+    pub(crate) fn header(&self) -> &Header {
+        &self.head
+    }
+
+    pub(crate) fn middle(&self) -> &Middle<F> {
+        &self.mid
+    }
+
+    pub(crate) fn tail(&self) -> &Tail {
+        &self.tail
+    }
+
+    pub(crate) fn future(&self) -> &mut F {
+        unsafe { &mut *self.mid.future.get() }
+    }
+
+    pub(crate) fn waker(&self) -> &Waker {
+        unsafe { &*self.tail.waker.get() }
+    }
+
+    // Set the waker used by the handle
+    pub(crate) fn set_handle_waker(&self, waker: &Waker) {
+        self.tail().h_waker.set(Some(waker.clone()))
+    }
+
+    // Getters for some specific stuff
+    pub(crate) fn poll_output(&self) -> Poll<F::Output> {
+        use std::mem;
+
+        let reference = unsafe { &mut *self.mid.poll.get() };
+
+        mem::replace(reference, Poll::Pending)
+    }
+}
+
+unsafe impl<F: Send + Future> Send for Core<F> {}
+
+#[derive(Copy, Clone)]
+pub(crate) struct RawTask {
+    ptr: NonNull<Header>,
+}
+
+impl RawTask {
+    // creates a new raw task from a future
+    pub fn new<F: Future + Send + 'static>(f: F) -> RawTask {
+        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Core::new(f, 1)))) };
+
+        RawTask {
+            ptr: ptr.cast::<Header>(),
         }
     }
-}
 
-// CORE
-pub struct Core {
-    vtable: Vtable,
-}
-
-impl Core {
-    pub fn new<F: Future + 'static + Send + Sync>() -> Core {
-        Core {
-            vtable: Vtable::new::<F>(),
-        }
-    }
-}
-
-// Task
-pub struct InnerTask<T: Future + 'static + Send + Sync> {
-    core: Core,
-    count: atomic::AtomicU8,
-    future: MutCell<T>,
-    waker: MutCell<Waker>,
-    poll: MutCell<Poll<T::Output>>,
-}
-
-impl<T: Send + Sync + Future + 'static> std::ops::Drop for InnerTask<T> {
-    fn drop(&mut self) {
-        println!("[INNER TASK] dropped inner task");
-    }
-}
-
-impl<F: Future + 'static + Send + Sync> InnerTask<F> {
-    pub(crate) fn new(future: F) -> InnerTask<F> {
-        InnerTask {
-            core: Core::new::<F>(),
-            count: atomic::AtomicU8::new(2),
-            future: unsafe { MutCell::new(future) },
-            waker: unsafe { MutCell::new(Waker::noop().clone()) },
-            poll: unsafe { MutCell::new(Poll::Pending) },
+    // creates a raw task from a pointer
+    pub fn from_ptr(ptr: *mut Header) -> RawTask {
+        RawTask {
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
         }
     }
 
-    /// This should NOT be called concurrently.
-    pub(crate) fn get_poll(&self) -> &MutCell<Poll<F::Output>> {
-        &self.poll
+    // convenience to access the header
+    fn header(&self) -> &Header {
+        unsafe { self.ptr.as_ref() }
     }
 
-    pub(crate) unsafe fn get_future(&self) -> &MutCell<F> {
-        &self.future
+    // convenience to access the vtable
+    fn vtable(&self) -> &Vtable {
+        self.header().vtable
     }
 
-    pub(crate) fn get_waker(&self) -> &Waker {
-        self.waker.get()
+    // Polls the future inside
+    fn poll(self) -> bool {
+        (self.vtable().poll)(self.ptr)
     }
 
-    pub(crate) fn change_poll(&self, poll: Poll<F::Output>) {
-        // Safety: accessed from one thread.
-        *unsafe { self.poll.get_mut() } = poll;
+    // Reviews the saved poll
+    //
+    // Writes it to the pointer and attaches the waker.
+    pub(crate) fn review(self, dst: *const (), waker: &Waker) {
+        (self.vtable().review)(self.ptr, dst, waker)
     }
 
-    pub(crate) fn change_waker(&self, waker: &Waker) {
-        if !waker.will_wake(&self.waker) {
-            println!("[TASK] changed waker!");
-            unsafe { *self.waker.get_mut() = waker.clone() }
-        }
+    // Wakes up the handle's waker (if there is one).
+    pub(crate) fn wake_handle(self) {
+        (self.vtable().wake_handle)(self.ptr)
     }
 
-    // Returns the value that is now in the `AtomicU8`
-    pub(crate) fn ref_dec(&self) -> u8 {
-        self.count.fetch_sub(1, atomic::Ordering::SeqCst) - 1
+    // Deallocates the pointer used for handling the task.
+    pub(crate) fn destroy(self) {
+        (self.vtable().destroy)(self.ptr)
     }
 
-    pub(crate) fn ref_inc(&self) -> u8 {
-        self.count.fetch_add(1, atomic::Ordering::SeqCst) + 1
+    // Returns ref count after adding.
+    pub(crate) fn ref_dec(self) -> u8 {
+        (self.vtable().ref_dec)(self.ptr)
     }
-}
-pub struct TaskHeader {
-    core: Core,
-}
 
-impl TaskHeader {
-    pub fn vtable(&self) -> &Vtable {
-        &self.core.vtable
+    // Returns ref count after removing
+    fn ref_inc(self) -> u8 {
+        (self.vtable().ref_inc)(self.ptr)
     }
 }
