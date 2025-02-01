@@ -5,12 +5,16 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::task::Waker;
 
+use log::info;
+
 type Ptr = NonNull<Header>;
 
 pub(crate) struct Vtable {
     pub(crate) poll: fn(Ptr) -> bool,
     pub(crate) review: fn(Ptr, *const (), &Waker),
     pub(crate) wake_handle: fn(Ptr),
+    pub(crate) send_note: fn(Ptr),
+    pub(crate) set_waker: fn(Ptr, Option<Waker>),
     pub(crate) ref_dec: fn(Ptr) -> u8,
     pub(crate) ref_inc: fn(Ptr) -> u8,
     pub(crate) destroy: fn(Ptr),
@@ -22,6 +26,8 @@ pub(crate) fn vtable<F: Future + Send + 'static>() -> &'static Vtable {
         destroy: destroy::<F>,
         review: review::<F>,
         wake_handle: wake_handle::<F>,
+        send_note: send_note::<F>,
+        set_waker: set_waker::<F>,
         ref_dec,
         ref_inc,
     }
@@ -29,26 +35,50 @@ pub(crate) fn vtable<F: Future + Send + 'static>() -> &'static Vtable {
 
 fn poll<F: Future + Send + 'static>(ptr: Ptr) -> bool {
     let m: Mantle<F> = Mantle::from_raw(ptr);
-    m.poll()
+    let state = m.poll();
+    info!("polled future");
+    state
 }
 
 fn destroy<F: Future + Send + 'static>(ptr: Ptr) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
     m.destroy();
+    info!("destroyed the task pointer")
 }
 fn review<F: Future + Send + 'static>(ptr: Ptr, dst: *const (), waker: &Waker) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
     m.review(dst, waker);
+    info!("reviewed the task's state")
 }
 
 fn wake_handle<F: Future + Send + 'static>(ptr: Ptr) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
 
     m.wake_handle();
+    info!("woke up the handle's waker")
 }
+
+fn send_note<F: Future + Send + 'static>(ptr: Ptr) {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
+
+    m.send_note();
+    info!("sent notif to runtime")
+}
+
+fn set_waker<F: Future + Send + 'static>(ptr: Ptr, waker: Option<Waker>) {
+    let m: Mantle<F> = Mantle::from_raw(ptr);
+
+    m.set_waker(waker);
+    info!("set waker of task")
+}
+
 fn ref_dec(ptr: Ptr) -> u8 {
-    unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) }
+    let output = unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) };
+    info!("decremented ref count, curr: {}", output - 1);
+    output
 }
 fn ref_inc(ptr: Ptr) -> u8 {
-    unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) }
+    let output = unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) };
+    info!("incremented ref count, curr: {}", output + 1);
+    output
 }

@@ -9,28 +9,50 @@ use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
 
 static EXEC: OnceLock<Executor> = OnceLock::new();
-struct RecvWrap<T> {
-    inner: mpsc::Receiver<T>,
+
+struct ChannelPair<T> {
+    s: mpsc::Sender<T>,
+    r: mpsc::Receiver<T>,
 }
 
-unsafe impl<T> Send for RecvWrap<T> {}
-unsafe impl<T> Sync for RecvWrap<T> {}
+unsafe impl<T> Send for ChannelPair<T> {}
+unsafe impl<T> Sync for ChannelPair<T> {}
+
+impl<T> ChannelPair<T> {
+    fn new() -> ChannelPair<T> {
+        let (s, r) = mpsc::channel();
+
+        ChannelPair { s, r }
+    }
+}
 
 pub struct Executor {
+    // Task queue
     storage: Mutex<HashMap<u64, Task>>,
-    recv: RecvWrap<Note>,
-    sender: mpsc::Sender<Note>,
+
+    // Channels for the main thread.
+    chan: ChannelPair<Note>,
+
+    // Storage for the main task. (spawned by Executor::start)
+    main: Mutex<Option<Task>>,
+
+    // Channels for other threads.
+    o_chan: ChannelPair<Note>,
+
+    // task ids
     count: AtomicU64,
 }
 
 impl Executor {
     fn new() -> Executor {
-        let (sender, r) = mpsc::channel();
-        let recv = RecvWrap { inner: r };
+        let chan = ChannelPair::new();
+        let o_chan = ChannelPair::new();
+
         Executor {
             storage: Mutex::new(HashMap::with_capacity(4096)),
-            recv,
-            sender,
+            main: Mutex::new(None),
+            chan,
+            o_chan,
             count: AtomicU64::new(0),
         }
     }
@@ -54,55 +76,75 @@ impl Executor {
         F: Future + Send + 'static,
         F::Output: Send + 'static + std::fmt::Debug,
     {
-        let num = Executor::get().count.fetch_add(1, Ordering::SeqCst);
-        let (task, note, _handle) = Task::new(f, num);
+        let exec = Executor::get();
 
-        Executor::add_task(task, note.0);
-        Executor::get().sender.send(note).unwrap();
-        println!("runtime: spawned main task with id: {} ", &note.0);
-        //loop {
+        let num = exec.count.fetch_add(1, Ordering::SeqCst);
+        let (task, note, handle) = Task::new(f, num, exec.chan.s.clone());
+        drop(handle);
 
-        loop {
-            while let Ok(n) = Executor::get().recv.inner.recv() {
-                println!("runtime: polling task with id: {0}", n.0);
+        *exec.main.lock().unwrap() = Some(task);
+        Executor::get().chan.s.send(note).unwrap();
+
+        let thread_handle = thread::spawn(move || {
+            while let Ok(n) = Executor::get().o_chan.r.recv() {
+                if n.0 == u64::MAX {
+                    break;
+                }
 
                 let mut storage = Executor::get().storage.lock().unwrap();
 
-                //if n.0 != 1 {
-                match storage.remove(&n.0) {
-                    Some(task) => {
-                        thread::spawn(move || {
-                            println!("thread: thread received a task.");
-                            if !task.poll() {
-                                let mut st = Executor::get().storage.lock().unwrap();
+                let task = storage.remove(&n.0).expect("no task with that id");
+                let state = task.poll();
 
-                                st.insert(n.0, task);
-                            } else {
-                                println!("thread: polled task is ready!");
-                            };
-                        });
-                    }
-                    None => println!("runtime: no task of id: {}", &n.0),
-                };
-                //} else {
-                //storage.get(&1).unwrap().poll();
-                //sbin}
-                drop(storage);
+                if !state {
+                    println!("Task not ready!");
+                    let mut st = Executor::get().storage.lock().unwrap();
+                    st.insert(n.0, task);
+                }
+            }
+        });
+
+        let mut done = false;
+        while !done {
+            dbg!(done);
+            while let Ok(_n) = Executor::get().chan.r.recv() {
+                let exec = Executor::get();
+
+                let task = exec.main.lock().unwrap();
+
+                let state = task.as_ref().unwrap().poll();
+                dbg!(state);
+
+                done = state;
+                if state {
+                    exec.o_chan.s.send(Note(u64::MAX)).unwrap();
+                    break;
+                }
             }
         }
-    }
 
+        let _ = thread_handle.join();
+    }
     pub fn spawn<F>(f: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let num = Executor::get().count.fetch_add(1, Ordering::SeqCst);
-        let (task, note, handle) = Task::new(f, num);
+        let exec = Executor::get();
+
+        let num = exec.count.fetch_add(1, Ordering::SeqCst);
+        let (task, note, handle) = Task::new(f, num, exec.o_chan.s.clone());
         Executor::add_task(task, note.0);
 
         println!("runtime: registered task with id: {}", &note.0);
-        Executor::get().sender.send(note).unwrap();
+        exec.o_chan.s.send(note).unwrap();
         handle
     }
 }
+
+// loop {
+//     while let Ok(n) = Executor::get().recv.inner.recv() {
+//         println!("runtime: polling task with id: {0}", n.0);
+
+//         drop(storage);
+//     }

@@ -1,5 +1,7 @@
 // Mantle for the task.
+use super::note::Note;
 use super::task::{Core, Header};
+
 use std::future::Future;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -24,14 +26,9 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn poll(self) -> bool {
         let future = unsafe { Pin::new_unchecked(self.core().future()) };
 
-        let mut cx = Context::from_waker(self.core().waker());
+        let mut cx = Context::from_waker(self.core().waker().unwrap());
         let output = future.poll(&mut cx);
         let ready = output.is_ready();
-        println!(
-            "runtime: task {0} is ready: {1}",
-            self.core().header().id,
-            ready
-        );
         let field = unsafe { &mut *self.core().middle().poll.get() };
         *field = output;
 
@@ -44,6 +41,8 @@ impl<F: Future + Send + 'static> Mantle<F> {
         drop(val)
     }
 
+    // Obtains the poll from the future.
+    // writes it into the provided pointer.
     pub(crate) fn review(self, dst: *const (), waker: &Waker) {
         let dest = unsafe { &mut *(dst as *mut Poll<F::Output>) };
         *dest = self.core().poll_output();
@@ -51,13 +50,27 @@ impl<F: Future + Send + 'static> Mantle<F> {
         self.core().set_handle_waker(waker);
     }
 
+    // Wakes up the handle if there is a waker present.
     pub(crate) fn wake_handle(self) {
         let waker = self.core().tail().h_waker.replace(None);
         if let Some(w) = waker {
             println!("task: woke up waker");
-            w.wake()
+            w.wake_by_ref()
         } else {
             println!("no waker!");
         }
+    }
+
+    // Sets the waker for a task.
+    pub(crate) fn set_waker(self, waker: Option<Waker>) {
+        self.core().tail().set_waker(waker);
+    }
+
+    // Sends a note to the assigned channel
+    pub(crate) fn send_note(self) {
+        let header = self.core().header();
+
+        println!("header id: {}", header.id);
+        header.sender.send(Note(header.id)).unwrap();
     }
 }

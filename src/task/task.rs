@@ -1,11 +1,15 @@
 use super::handle::TaskHandle;
 use super::note::Note;
 use super::vtable::{Vtable, vtable};
+use super::waker;
+
+use log::info;
 
 use std::cell::{Cell, UnsafeCell};
 use std::future::Future;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicU8;
+use std::sync::mpsc::Sender;
 use std::task::{Poll, Waker};
 
 static REF_COUNT_BASE: u8 = 2;
@@ -16,8 +20,15 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new<F: Future + Send + 'static>(f: F, id: u64) -> (Task, Note, TaskHandle<F::Output>) {
-        let raw = RawTask::new(f);
+    pub fn new<F: Future + Send + 'static>(
+        f: F,
+        id: u64,
+        sender: Sender<Note>,
+    ) -> (Task, Note, TaskHandle<F::Output>) {
+        let raw = RawTask::new(f, sender);
+        let waker = waker::make_waker(raw.ptr);
+
+        raw.set_waker(Some(waker));
 
         (Task { raw }, Note(id), TaskHandle::new(raw))
     }
@@ -38,30 +49,40 @@ impl std::ops::Drop for Task {
             println!("Deallocated the pointer");
             self.raw.destroy();
         }
-
-        println!("Dropped task!");
+        info!("Dropped task id: {}", self.raw.header().id)
     }
 }
 
 unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
+// Header, often used and updated data.
 pub(crate) struct Header {
     pub(crate) id: u64,
     pub(crate) refs: AtomicU8,
-    pub(crate) vtable: &'static Vtable, // todo
+    pub(crate) vtable: &'static Vtable,
+    pub(crate) sender: Sender<Note>,
 }
 
 unsafe impl Send for Header {}
 
+// Middle, contains the future and it's output.
 pub(crate) struct Middle<F: Future + Send + 'static> {
     future: UnsafeCell<F>,
     pub(crate) poll: UnsafeCell<Poll<F::Output>>,
 }
 
+// Tail of the task, used for rarely updated data
 pub(crate) struct Tail {
-    pub(crate) waker: UnsafeCell<Waker>,
+    pub(crate) waker: UnsafeCell<Option<Waker>>,
     pub(crate) h_waker: Cell<Option<Waker>>,
+}
+
+impl Tail {
+    // sets the waker for the task
+    pub(crate) fn set_waker(&self, w: Option<Waker>) {
+        unsafe { *(self.waker.get()) = w };
+    }
 }
 
 pub(crate) struct Core<F: Future + Send + 'static> {
@@ -71,11 +92,12 @@ pub(crate) struct Core<F: Future + Send + 'static> {
 }
 
 impl<F: Future + Send + 'static> Core<F> {
-    pub(crate) fn new(f: F, id: u64) -> Core<F> {
+    pub(crate) fn new(f: F, id: u64, sender: Sender<Note>) -> Core<F> {
         let head = Header {
             id,
             refs: AtomicU8::new(REF_COUNT_BASE),
             vtable: vtable::<F>(),
+            sender,
         };
 
         let mid = Middle {
@@ -84,7 +106,7 @@ impl<F: Future + Send + 'static> Core<F> {
         };
 
         let tail = Tail {
-            waker: UnsafeCell::new(Waker::noop().clone()),
+            waker: UnsafeCell::new(None),
             h_waker: Cell::new(None),
         };
 
@@ -109,8 +131,11 @@ impl<F: Future + Send + 'static> Core<F> {
         unsafe { &mut *self.mid.future.get() }
     }
 
-    pub(crate) fn waker(&self) -> &Waker {
-        unsafe { &*self.tail.waker.get() }
+    pub(crate) fn waker(&self) -> Option<&Waker> {
+        match unsafe { &*self.tail.waker.get() } {
+            None => None,
+            Some(waker) => Some(waker),
+        }
     }
 
     // Set the waker used by the handle
@@ -137,8 +162,9 @@ pub(crate) struct RawTask {
 
 impl RawTask {
     // creates a new raw task from a future
-    pub fn new<F: Future + Send + 'static>(f: F) -> RawTask {
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Core::new(f, 1)))) };
+    pub fn new<F: Future + Send + 'static>(f: F, sender: Sender<Note>) -> RawTask {
+        let ptr =
+            unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Core::new(f, 1, sender)))) };
 
         RawTask {
             ptr: ptr.cast::<Header>(),
@@ -174,6 +200,16 @@ impl RawTask {
         (self.vtable().review)(self.ptr, dst, waker)
     }
 
+    // Sends notification to the channel.
+    pub(crate) fn send_note(self) {
+        (self.vtable().send_note)(self.ptr)
+    }
+
+    // Sets the task's waker.
+    pub(crate) fn set_waker(self, waker: Option<Waker>) {
+        (self.vtable().set_waker)(self.ptr, waker);
+    }
+
     // Wakes up the handle's waker (if there is one).
     pub(crate) fn wake_handle(self) {
         (self.vtable().wake_handle)(self.ptr)
@@ -184,13 +220,13 @@ impl RawTask {
         (self.vtable().destroy)(self.ptr)
     }
 
-    // Returns ref count after adding.
+    // Returns ref count after subtrackting.
     pub(crate) fn ref_dec(self) -> u8 {
         (self.vtable().ref_dec)(self.ptr)
     }
 
-    // Returns ref count after removing
-    fn ref_inc(self) -> u8 {
+    // Returns ref count after adding
+    pub(crate) fn ref_inc(self) -> u8 {
         (self.vtable().ref_inc)(self.ptr)
     }
 }

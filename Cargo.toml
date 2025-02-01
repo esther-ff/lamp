@@ -1,7 +1,8 @@
 [package]
-name = "lowlevel-task"
+name = "lamp"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 futures = "0.3.31"
+log = "0.4.25"
