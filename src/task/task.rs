@@ -36,10 +36,6 @@ impl Task {
     pub(crate) fn poll(&self) -> bool {
         self.raw.poll()
     }
-
-    pub(crate) fn destroy(&self) {
-        self.raw.destroy()
-    }
 }
 
 impl std::ops::Drop for Task {
@@ -140,7 +136,8 @@ impl<F: Future + Send + 'static> Core<F> {
 
     // Set the waker used by the handle
     pub(crate) fn set_handle_waker(&self, waker: &Waker) {
-        self.tail().h_waker.set(Some(waker.clone()))
+        self.tail().h_waker.set(Some(waker.clone()));
+        info!("set handle waker for task, id: {}", self.header().id);
     }
 
     // Getters for some specific stuff

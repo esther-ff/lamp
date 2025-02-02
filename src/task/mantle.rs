@@ -7,6 +7,8 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
 
+use log::{debug, info, warn};
+
 #[derive(Copy, Clone)]
 pub(crate) struct Mantle<F: Future + Send + 'static> {
     ptr: NonNull<Core<F>>,
@@ -32,13 +34,15 @@ impl<F: Future + Send + 'static> Mantle<F> {
         let field = unsafe { &mut *self.core().middle().poll.get() };
         *field = output;
 
+        info!("polled task (id: {})", self.core().header().id);
         ready
     }
 
     pub(crate) fn destroy(self) {
         let val = unsafe { Box::from_raw(self.ptr.as_ptr()) };
 
-        drop(val)
+        drop(val);
+        debug!("deallocated task!");
     }
 
     // Obtains the poll from the future.
@@ -46,7 +50,7 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn review(self, dst: *const (), waker: &Waker) {
         let dest = unsafe { &mut *(dst as *mut Poll<F::Output>) };
         *dest = self.core().poll_output();
-        println!("runtime: transferred value to handle");
+        info!("transferred value to the handle");
         self.core().set_handle_waker(waker);
     }
 
@@ -54,10 +58,10 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn wake_handle(self) {
         let waker = self.core().tail().h_waker.replace(None);
         if let Some(w) = waker {
-            println!("task: woke up waker");
+            info!("woke up handle");
             w.wake_by_ref()
         } else {
-            println!("no waker!");
+            warn!("no waker to wake up")
         }
     }
 
@@ -70,7 +74,7 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn send_note(self) {
         let header = self.core().header();
 
-        println!("header id: {}", header.id);
+        info!("sent note to runtime, id: {}", header.id);
         header.sender.send(Note(header.id)).unwrap();
     }
 }

@@ -1,7 +1,6 @@
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
-use std::sync::atomic::AtomicU64;
 
 use slab::Slab;
 
@@ -125,15 +124,7 @@ impl Executor {
         storage.insert(task);
         drop(storage);
 
-        println!("runtime: registered task with id: {}", &note.0);
         exec.o_chan.s.send(note).unwrap();
         handle
     }
 }
-
-// loop {
-//     while let Ok(n) = Executor::get().recv.inner.recv() {
-//         println!("runtime: polling task with id: {0}", n.0);
-
-//         drop(storage);
-//     }
