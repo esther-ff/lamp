@@ -1,11 +1,11 @@
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
-use std::collections::HashMap;
-use std::mem;
-use std::sync::{Mutex, OnceLock, mpsc};
+use slab::Slab;
+
+use std::sync::{Mutex, OnceLock, RwLock, mpsc};
 use std::thread;
 
 static EXEC: OnceLock<Executor> = OnceLock::new();
@@ -28,7 +28,7 @@ impl<T> ChannelPair<T> {
 
 pub struct Executor {
     // Task queue
-    storage: Mutex<HashMap<u64, Task>>,
+    storage: RwLock<Slab<Task>>,
 
     // Channels for the main thread.
     chan: ChannelPair<Note>,
@@ -38,9 +38,6 @@ pub struct Executor {
 
     // Channels for other threads.
     o_chan: ChannelPair<Note>,
-
-    // task ids
-    count: AtomicU64,
 }
 
 impl Executor {
@@ -49,11 +46,10 @@ impl Executor {
         let o_chan = ChannelPair::new();
 
         Executor {
-            storage: Mutex::new(HashMap::with_capacity(4096)),
+            storage: RwLock::new(Slab::with_capacity(4096)),
             main: Mutex::new(None),
             chan,
             o_chan,
-            count: AtomicU64::new(0),
         }
     }
 
@@ -65,12 +61,6 @@ impl Executor {
         EXEC.get().expect("runtime is not running")
     }
 
-    fn add_task(task: Task, id: u64) {
-        let mut storage = Executor::get().storage.lock().unwrap();
-
-        storage.insert(id, task);
-    }
-
     pub fn start<F>(f: F)
     where
         F: Future + Send + 'static,
@@ -78,8 +68,7 @@ impl Executor {
     {
         let exec = Executor::get();
 
-        let num = exec.count.fetch_add(1, Ordering::SeqCst);
-        let (task, note, handle) = Task::new(f, num, exec.chan.s.clone());
+        let (task, note, handle) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
         drop(handle);
 
         *exec.main.lock().unwrap() = Some(task);
@@ -91,29 +80,26 @@ impl Executor {
                     break;
                 }
 
-                let mut storage = Executor::get().storage.lock().unwrap();
+                let storage = Executor::get().storage.read().unwrap();
 
-                let task = storage.remove(&n.0).expect("no task with that id");
+                let task = storage.get(n.0 as usize).unwrap();
                 let state = task.poll();
+                drop(storage);
 
-                if !state {
-                    println!("Task not ready!");
-                    let mut st = Executor::get().storage.lock().unwrap();
-                    st.insert(n.0, task);
+                if state {
+                    let mut st = Executor::get().storage.write().unwrap();
+                    st.remove(n.0 as usize);
                 }
             }
         });
 
         let mut done = false;
         while !done {
-            dbg!(done);
             while let Ok(_n) = Executor::get().chan.r.recv() {
                 let exec = Executor::get();
-
                 let task = exec.main.lock().unwrap();
-
                 let state = task.as_ref().unwrap().poll();
-                dbg!(state);
+                drop(task);
 
                 done = state;
                 if state {
@@ -132,9 +118,12 @@ impl Executor {
     {
         let exec = Executor::get();
 
-        let num = exec.count.fetch_add(1, Ordering::SeqCst);
-        let (task, note, handle) = Task::new(f, num, exec.o_chan.s.clone());
-        Executor::add_task(task, note.0);
+        let mut storage = exec.storage.write().unwrap();
+        let num = storage.vacant_key();
+
+        let (task, note, handle) = Task::new(f, num as u64, exec.chan.s.clone());
+        storage.insert(task);
+        drop(storage);
 
         println!("runtime: registered task with id: {}", &note.0);
         exec.o_chan.s.send(note).unwrap();
