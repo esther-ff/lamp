@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
 
-use log::{debug, info, warn};
+use log::{info, warn};
 
 #[derive(Copy, Clone)]
 pub(crate) struct Mantle<F: Future + Send + 'static> {
@@ -34,34 +34,34 @@ impl<F: Future + Send + 'static> Mantle<F> {
         let field = unsafe { &mut *self.core().middle().poll.get() };
         *field = output;
 
-        info!("polled task (id: {})", self.core().header().id);
         ready
     }
 
     pub(crate) fn destroy(self) {
-        let val = unsafe { Box::from_raw(self.ptr.as_ptr()) };
-
-        drop(val);
-        debug!("deallocated task!");
+        drop(unsafe { Box::from_raw(self.ptr.as_ptr()) })
     }
 
     // Obtains the poll from the future.
     // writes it into the provided pointer.
     pub(crate) fn review(self, dst: *const (), waker: &Waker) {
+        let output = self.core().poll_output();
         let dest = unsafe { &mut *(dst as *mut Poll<F::Output>) };
-        *dest = self.core().poll_output();
-        info!("transferred value to the handle");
-        self.core().set_handle_waker(waker);
+
+        if output.is_pending() {
+            self.core().set_handle_waker(waker);
+        };
+
+        *dest = output;
     }
 
     // Wakes up the handle if there is a waker present.
     pub(crate) fn wake_handle(self) {
-        let waker = self.core().tail().h_waker.replace(None);
-        if let Some(w) = waker {
-            info!("woke up handle");
-            w.wake_by_ref()
+        let waker = self.core().tail().h_waker.lock().unwrap();
+        if let Some(w) = waker.as_ref() {
+            info!("woke up waker id: {}", self.core().header().id);
+            w.wake_by_ref();
         } else {
-            warn!("no waker to wake up")
+            warn!("no waker! id: {}", self.core().header().id);
         }
     }
 
@@ -74,7 +74,7 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn send_note(self) {
         let header = self.core().header();
 
-        info!("sent note to runtime, id: {}", header.id);
+        println!("header id: {}", header.id);
         header.sender.send(Note(header.id)).unwrap();
     }
 }

@@ -2,8 +2,9 @@ use super::task::RawTask;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
+use log::{info, warn};
 pub struct TaskHandle<T> {
     raw: RawTask,
     _t: PhantomData<T>,
@@ -11,6 +12,8 @@ pub struct TaskHandle<T> {
 
 impl<T> TaskHandle<T> {
     pub(crate) fn new(raw: RawTask) -> TaskHandle<T> {
+        warn!("Incremented in TaskHandle::new");
+        raw.ref_inc();
         TaskHandle {
             raw,
             _t: PhantomData,
@@ -25,18 +28,19 @@ impl<T: std::fmt::Debug> Future for TaskHandle<T> {
         let mut out = Poll::Pending;
 
         self.raw.review(&mut out as *mut _ as *const (), cx.waker());
-        dbg!(&out);
+
+        // DO NOT REMOVE
+        // THIS WEIRDLY CAUSES A DATA RACE NOT TO HAPPEN
+        // WILL BE FIXED
+        //dbg!(&out);
         out
     }
 }
 
 impl<T> std::ops::Drop for TaskHandle<T> {
     fn drop(&mut self) {
-        println!("Dropped handle!");
-        if self.raw.ref_dec() == 0 {
-            println!("Deallocated the pointer (handle)");
-            self.raw.destroy();
-        }
+        info!("dropped handle id: {}", self.raw.header().id);
+        self.raw.ref_destroy();
     }
 }
 

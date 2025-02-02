@@ -1,7 +1,9 @@
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
+use std::sync::atomic::AtomicU64;
 
+use log::{debug, info};
 use slab::Slab;
 
 use std::sync::{Mutex, OnceLock, RwLock, mpsc};
@@ -66,12 +68,7 @@ impl Executor {
         F::Output: Send + 'static + std::fmt::Debug,
     {
         let exec = Executor::get();
-
-        let (task, note, handle) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
-        drop(handle);
-
-        *exec.main.lock().unwrap() = Some(task);
-        Executor::get().chan.s.send(note).unwrap();
+        let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
 
         let thread_handle = thread::spawn(move || {
             while let Ok(n) = Executor::get().o_chan.r.recv() {
@@ -82,33 +79,30 @@ impl Executor {
                 let storage = Executor::get().storage.read().unwrap();
 
                 let task = storage.get(n.0 as usize).unwrap();
-                let state = task.poll();
+                let ready = task.poll();
+                dbg!(ready);
                 drop(storage);
 
-                if state {
+                if ready {
                     let mut st = Executor::get().storage.write().unwrap();
-                    st.remove(n.0 as usize);
+                    let _ = st.remove(n.0 as usize);
+                    info!("removed task (id: {})", n.0);
                 }
             }
         });
 
-        let mut done = false;
-        while !done {
-            while let Ok(_n) = Executor::get().chan.r.recv() {
-                let exec = Executor::get();
-                let task = exec.main.lock().unwrap();
-                let state = task.as_ref().unwrap().poll();
-                drop(task);
+        loop {
+            let ready = task.poll();
 
-                done = state;
-                if state {
-                    exec.o_chan.s.send(Note(u64::MAX)).unwrap();
-                    break;
-                }
+            if ready {
+                exec.o_chan.s.send(Note(u64::MAX)).unwrap();
+                let _ = thread_handle.join();
+                drop(task);
+                break;
+            } else {
+                let _ = exec.chan.r.recv();
             }
         }
-
-        let _ = thread_handle.join();
     }
     pub fn spawn<F>(f: F) -> TaskHandle<F::Output>
     where
@@ -124,7 +118,15 @@ impl Executor {
         storage.insert(task);
         drop(storage);
 
+        info!("registered task with id: {}", &note.0);
         exec.o_chan.s.send(note).unwrap();
         handle
     }
 }
+
+// loop {
+//     while let Ok(n) = Executor::get().recv.inner.recv() {
+//         println!("runtime: polling task with id: {0}", n.0);
+
+//         drop(storage);
+//     }

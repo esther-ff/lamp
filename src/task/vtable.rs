@@ -36,7 +36,6 @@ pub(crate) fn vtable<F: Future + Send + 'static>() -> &'static Vtable {
 fn poll<F: Future + Send + 'static>(ptr: Ptr) -> bool {
     let m: Mantle<F> = Mantle::from_raw(ptr);
     let state = m.poll();
-    info!("polled future");
     state
 }
 
@@ -48,14 +47,12 @@ fn destroy<F: Future + Send + 'static>(ptr: Ptr) {
 fn review<F: Future + Send + 'static>(ptr: Ptr, dst: *const (), waker: &Waker) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
     m.review(dst, waker);
-    info!("reviewed the task's state")
 }
 
 fn wake_handle<F: Future + Send + 'static>(ptr: Ptr) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
 
     m.wake_handle();
-    info!("woke up the handle's waker")
 }
 
 fn send_note<F: Future + Send + 'static>(ptr: Ptr) {
@@ -74,11 +71,19 @@ fn set_waker<F: Future + Send + 'static>(ptr: Ptr, waker: Option<Waker>) {
 
 fn ref_dec(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) };
-    info!("decremented ref count, curr: {}", output - 1);
-    output
+
+    let id = unsafe { (*ptr.as_ptr()).id };
+    info!(
+        "decremented ref count (id: {id}), past: {}, curr: {}",
+        output,
+        output - 1
+    );
+    output - 1
 }
 fn ref_inc(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) };
-    info!("incremented ref count, curr: {}", output + 1);
-    output
+
+    let id = unsafe { (*ptr.as_ptr()).id };
+    info!("incremented ref count (id: {id}), curr: {}", output + 1);
+    output + 1
 }
