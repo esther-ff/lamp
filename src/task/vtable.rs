@@ -35,8 +35,7 @@ pub(crate) fn vtable<F: Future + Send + 'static>() -> &'static Vtable {
 
 fn poll<F: Future + Send + 'static>(ptr: Ptr) -> bool {
     let m: Mantle<F> = Mantle::from_raw(ptr);
-    let state = m.poll();
-    state
+    m.poll()
 }
 
 fn destroy<F: Future + Send + 'static>(ptr: Ptr) {
