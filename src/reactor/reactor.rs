@@ -3,7 +3,7 @@ use mio::event::Source;
 use mio::{Events, Interest, Poll, Registry, Token};
 use slab::Slab;
 use std::io::Result as IoResult;
-use std::sync::{Arc, Mutex, atomic::AtomicU64, atomic::Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::Context;
 
 /// represents the interest of the underlying io.

@@ -5,7 +5,7 @@ use super::waker;
 
 use log::{info, warn};
 
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::future::Future;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -38,10 +38,6 @@ impl Task {
 
     pub(crate) fn poll(&self) -> bool {
         self.raw.poll()
-    }
-
-    pub(crate) fn destroy(&self) {
-        self.raw.destroy()
     }
 }
 

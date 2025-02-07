@@ -4,7 +4,7 @@ use crate::task::note::Note;
 use crate::task::task::Task;
 use log::info;
 use slab::Slab;
-use std::sync::{Arc, Mutex, OnceLock, RwLock, mpsc};
+use std::sync::{Arc, OnceLock, RwLock, mpsc};
 
 use std::thread;
 static EXEC: OnceLock<Executor> = OnceLock::new();
@@ -32,16 +32,15 @@ pub struct Executor {
     // Channels for the main thread.
     chan: ChannelPair<Note>,
 
-    // Storage for the main task. (spawned by Executor::start)
-    main: Mutex<Option<Task>>,
-
     // Channels for other threads.
     o_chan: ChannelPair<Note>,
 
     // I/O Reactor
     reactor: Reactor,
 
+    // Might be useful later
     // Handle to reactor
+    #[allow(dead_code)]
     handle: Arc<Handle>,
 }
 
@@ -52,7 +51,6 @@ impl Executor {
         let (reactor, handle) = Reactor::new();
         Executor {
             storage: RwLock::new(Slab::with_capacity(4096)),
-            main: Mutex::new(None),
             chan,
             o_chan,
             reactor,

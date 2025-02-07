@@ -2,7 +2,7 @@ use super::task::RawTask;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 use log::{info, warn};
 pub struct TaskHandle<T> {
