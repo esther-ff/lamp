@@ -1,5 +1,5 @@
 // I/O Reactor
-use crate::io::IoSource;
+use super::IoSource;
 use async_lock::OnceCell;
 use mio::event::Source;
 use mio::{Events, Interest, Poll, Registry, Token};

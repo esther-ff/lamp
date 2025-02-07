@@ -1,12 +1,11 @@
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
-use std::sync::atomic::AtomicU64;
-
 use log::{debug, info};
 use slab::Slab;
+use std::sync::atomic::AtomicU64;
 
-use std::sync::{Mutex, OnceLock, RwLock, mpsc};
+use std::sync::{mpsc, Mutex, OnceLock, RwLock};
 use std::thread;
 
 static EXEC: OnceLock<Executor> = OnceLock::new();
