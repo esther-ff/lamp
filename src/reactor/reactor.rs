@@ -1,6 +1,4 @@
-// I/O Reactor
 use super::IoSource;
-use async_lock::OnceCell;
 use mio::event::Source;
 use mio::{Events, Interest, Poll, Registry, Token};
 use slab::Slab;
@@ -53,7 +51,7 @@ impl Handle {
 impl Reactor {
     /// Create a new Reactor
     pub fn new() -> (Reactor, Arc<Handle>) {
-        let poll = Poll::new().expect("poll create fail");
+        let poll = Poll::new().expect("failed to create poll");
         let events = Arc::new(Mutex::new(Events::with_capacity(1024)));
         let registry = poll.registry().try_clone().expect("registry clone fail");
         let sources = Arc::new(Mutex::new(Slab::with_capacity(1024)));
@@ -69,77 +67,65 @@ impl Reactor {
     }
 
     /// Get reference to the global Reactor instance.
-    pub fn get() -> &'static Reactor {
-        static REACTOR: OnceCell<Reactor> = OnceCell::new();
+    pub fn start(&self) {
+        // Polling thread
+        let arc_events = Arc::clone(&self.events);
+        let arc_sources = Arc::clone(&self.sources);
+        let handle = Arc::clone(&self.handle);
+        std::thread::spawn(move || {
+            let mut poll = handle.poll.lock().expect("failed loop poll lock");
+            let mut events = arc_events.lock().expect("event lock fail");
 
-        REACTOR.get_or_init_blocking(|| {
-            let (reactor, handle) = Reactor::new();
+            loop {
+                match poll.poll(&mut events, None) {
+                    Ok(_) => {}
+                    Err(e) => panic!("Error: {:?}", e),
+                }
 
-            // Polling thread
-            let arc_events = Arc::clone(&reactor.events);
-            let arc_sources = Arc::clone(&reactor.sources);
+                for event in events.iter() {
+                    println!("{:?}", event);
+                    let srcs = arc_sources.lock().expect("sources lock in loop failed!");
 
-            std::thread::spawn(move || {
-                let mut poll = handle.poll.lock().expect("failed loop poll lock");
-                let mut events = arc_events.lock().expect("event lock fail");
+                    let src = match srcs.get(event.token().0) {
+                        None => panic!(
+                            "Received event for token {}, but no such source is present.",
+                            event.token().0
+                        ),
+                        Some(source) => source,
+                    };
 
-                loop {
-                    match poll.poll(&mut events, None) {
-                        Ok(_) => {}
-                        Err(e) => panic!("Error: {:?}", e),
-                    }
-
-                    for event in events.iter() {
-                        println!("{:?}", event);
-                        let srcs = arc_sources.lock().expect("sources lock in loop failed!");
-
-                        let src = match srcs.get(event.token().0) {
-                            None => panic!(
-                                "Received event for token {}, but no such source is present.",
-                                event.token().0
-                            ),
-                            Some(source) => source,
-                        };
-
-                        if src.has_wakers() {
-                            src.wake_with_event(event)
-                        }
+                    if src.has_wakers() {
+                        src.wake_with_event(event)
                     }
                 }
-            });
-
-            reactor
-        })
+            }
+        });
     }
 
     /// Obtains handle from a reactor.
-    pub fn get_handle() -> Arc<Handle> {
-        Reactor::get().handle.clone()
+    pub fn get_handle(&self) -> Arc<Handle> {
+        self.handle.clone()
     }
 
     /// Registers a IO source in the reactor.
-    pub fn register(src: &mut impl Source, interest: Interest) -> IoResult<()> {
-        let mut sources = Reactor::get().sources.lock().expect("failed source lock");
+    pub fn register(&self, src: &mut impl Source, interest: Interest) -> IoResult<()> {
+        let mut sources = self.sources.lock().expect("failed source lock");
         let token = sources.vacant_key();
 
-        Reactor::get_handle()
-            .registry
-            .register(src, Token(token), interest)?;
+        self.handle.registry.register(src, Token(token), interest)?;
 
         let _key = sources.insert(IoSource::new(token));
         Ok(())
     }
 
     /// Reregisters a IO source in the reactor.
-    pub fn reregister(src: &mut impl Source, token: usize, intr: Interest) -> IoResult<()> {
+    pub fn reregister(&self, src: &mut impl Source, token: usize, intr: Interest) -> IoResult<()> {
         //let sources = Reactor::get().sources.lock().expect("failed sources lock!");
-        Reactor::get_handle()
-            .registry
-            .reregister(src, Token(token), intr)
+        self.handle.registry.reregister(src, Token(token), intr)
     }
 
-    pub fn attach_waker(cx: &mut Context<'_>, token: Token, dir: Direction) {
-        let mut sources = Reactor::get().sources.lock().expect("failed sources lock!");
+    pub fn attach_waker(&self, cx: &mut Context<'_>, token: Token, dir: Direction) {
+        let mut sources = self.sources.lock().expect("failed sources lock!");
         let src = match sources.get_mut(token.0) {
             Some(source) => source,
             None => panic!("Trying to attach waker to an unregistered source!"),

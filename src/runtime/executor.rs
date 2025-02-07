@@ -1,13 +1,12 @@
+use crate::reactor::{Handle, Reactor};
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
-use log::{debug, info};
+use log::info;
 use slab::Slab;
-use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex, OnceLock, RwLock, mpsc};
 
-use std::sync::{mpsc, Mutex, OnceLock, RwLock};
 use std::thread;
-
 static EXEC: OnceLock<Executor> = OnceLock::new();
 
 struct ChannelPair<T> {
@@ -38,18 +37,26 @@ pub struct Executor {
 
     // Channels for other threads.
     o_chan: ChannelPair<Note>,
+
+    // I/O Reactor
+    reactor: Reactor,
+
+    // Handle to reactor
+    handle: Arc<Handle>,
 }
 
 impl Executor {
     fn new() -> Executor {
         let chan = ChannelPair::new();
         let o_chan = ChannelPair::new();
-
+        let (reactor, handle) = Reactor::new();
         Executor {
             storage: RwLock::new(Slab::with_capacity(4096)),
             main: Mutex::new(None),
             chan,
             o_chan,
+            reactor,
+            handle,
         }
     }
 
@@ -67,6 +74,7 @@ impl Executor {
         F::Output: Send + 'static + std::fmt::Debug,
     {
         let exec = Executor::get();
+        exec.reactor.start();
         let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
 
         let thread_handle = thread::spawn(move || {
