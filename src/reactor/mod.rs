@@ -1,3 +1,4 @@
+pub mod io;
 mod iosource;
 mod reactor;
 

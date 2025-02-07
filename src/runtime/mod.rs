@@ -1,3 +1,3 @@
 pub(crate) mod executor;
 
-pub(crate) use executor::Executor;
+pub use executor::Executor;

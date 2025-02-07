@@ -1,10 +1,14 @@
 mod reactor;
-mod runtime;
+pub mod runtime;
 mod task;
 
+pub use reactor::io;
+
+pub use runtime::Executor;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reactor::io::{AsyncRead, AsyncWrite};
     use log::{Level, Metadata, Record};
 
     struct Logger;
@@ -32,7 +36,22 @@ mod tests {
         log::set_logger(logger).map(|()| log::set_max_level(log::LevelFilter::Info))
     }
 
-    use runtime::Executor;
+    fn test_tcp_server() -> std::thread::JoinHandle<u8> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        thread::spawn(|| {
+            let mut buf: [u8; 1] = [0u8; 1];
+            let listener = TcpListener::bind("127.0.0.1:8011").unwrap();
+
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write(&[1_u8]).unwrap();
+            stream.read(&mut buf).unwrap();
+
+            buf[0]
+        })
+    }
 
     #[test]
     fn delayed_task() {
@@ -50,5 +69,27 @@ mod tests {
 
             println!("Guh");
         });
+    }
+
+    #[test]
+    fn read_write_network() {
+        //static LOG: Logger = Logger;
+
+        //log_init(&LOG).unwrap();
+        let handle = test_tcp_server();
+
+        Executor::build();
+        Executor::start(async move {
+            let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
+            let mut buf: [u8; 1] = [0u8; 1];
+            stream.async_read(&mut buf).await.unwrap();
+
+            assert_eq!(buf[0], 1_u8);
+
+            stream.async_write(&buf).await.unwrap();
+            let value = handle.join().unwrap();
+
+            assert_eq!(value, 1_u8);
+        })
     }
 }

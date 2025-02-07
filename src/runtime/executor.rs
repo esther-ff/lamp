@@ -68,10 +68,14 @@ impl Executor {
         EXEC.get().expect("runtime is not running")
     }
 
+    pub fn get_reactor() -> &'static Reactor {
+        &Executor::get().reactor
+    }
+
     pub fn start<F>(f: F)
     where
         F: Future + Send + 'static,
-        F::Output: Send + 'static + std::fmt::Debug,
+        F::Output: Send + 'static,
     {
         let exec = Executor::get();
         exec.reactor.start();
@@ -130,10 +134,3 @@ impl Executor {
         handle
     }
 }
-
-// loop {
-//     while let Ok(n) = Executor::get().recv.inner.recv() {
-//         println!("runtime: polling task with id: {0}", n.0);
-
-//         drop(storage);
-//     }
