@@ -4,7 +4,7 @@ use std::thread::{self, available_parallelism};
 
 use slab::Slab;
 
-pub(crate) struct WorkerThread<T> {
+pub(crate) struct WorkerThread<T: Send + 'static> {
     name: String,
     occupied: Arc<AtomicBool>,
     tasks_done: u64,
@@ -40,6 +40,16 @@ impl<T: Send + 'static> WorkerThread<T> {
         self.sender.send(notif)
     }
 
+    pub(crate) fn join(&mut self) -> thread::Result<()> {
+        let handle = self.handle.take();
+
+        if handle.is_some() {
+            handle.unwrap().join()
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn rebuild(&mut self) {
         let (sender, receiver) = mpsc::channel();
         let clone = Arc::clone(&self.occupied);
@@ -54,7 +64,7 @@ impl<T: Send + 'static> WorkerThread<T> {
     }
 }
 
-pub(crate) struct ThreadPool<Notif> {
+pub(crate) struct ThreadPool<Notif: Send + 'static> {
     workers: Slab<WorkerThread<Notif>>,
     occupied: Slab<WorkerThread<Notif>>,
 }
@@ -102,5 +112,30 @@ impl<Notif: Send + 'static> ThreadPool<Notif> {
             .get_mut(chosen)
             .expect("expected a worker here")
             .push(n)
+    }
+
+    pub(crate) fn join(&mut self) -> thread::Result<()> {
+        let mut result = Ok(());
+
+        self.workers.iter_mut().for_each(|(_, v)| result = v.join());
+
+        result
+    }
+}
+
+unsafe impl<T: Send> Send for WorkerThread<T> {}
+impl<T: Send + 'static> std::ops::Drop for WorkerThread<T> {
+    fn drop(&mut self) {
+        self.join();
+    }
+}
+unsafe impl<T: Send> Send for ThreadPool<T> {}
+
+impl<T: Send + 'static> std::ops::Drop for ThreadPool<T> {
+    fn drop(&mut self) {
+        self.workers.iter_mut().for_each(|(_, v)| {
+            v.join();
+            drop(v);
+        });
     }
 }

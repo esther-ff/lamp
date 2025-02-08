@@ -6,8 +6,6 @@ use log::info;
 use slab::Slab;
 use std::sync::{Arc, Mutex, OnceLock, RwLock, atomic::AtomicBool, atomic::Ordering, mpsc};
 
-use std::thread;
-
 use super::threads::ThreadPool;
 
 static EXEC: OnceLock<Executor> = OnceLock::new();
@@ -111,14 +109,12 @@ impl Executor {
         exec.reactor.start();
         let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
 
-        let thread_handle = thread::spawn(move || {});
-
         loop {
             let ready = task.poll();
 
             if ready {
                 exec.o_chan.s.send(Note(u64::MAX)).unwrap();
-                let _ = exec.pool.join();
+                let _ = exec.pool.lock().unwrap().join();
                 drop(task);
                 break;
             } else {
@@ -141,7 +137,8 @@ impl Executor {
         drop(storage);
 
         info!("registered task with id: {}", &note.0);
-        exec.pool.lock().unwrap().deploy(note);
+        // Handle properly.
+        let _ = exec.pool.lock().unwrap().deploy(note);
         handle
     }
 }
