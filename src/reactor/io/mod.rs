@@ -1,9 +1,7 @@
-/// IoSource trait.
 mod iosource;
-pub(crate) use iosource::IoSource;
 
 /// TcpStream struct.
-pub(crate) use tcp_stream::TcpStream;
+pub use tcp_stream::TcpStream;
 mod tcp_stream;
 
 /// Trait for asychronous reads.
