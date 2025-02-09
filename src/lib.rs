@@ -57,7 +57,7 @@ mod tests {
     fn delayed_task() {
         static LOG: Logger = Logger;
         log_init(&LOG).unwrap();
-        Executor::build();
+        Executor::build(4);
         Executor::start(async {
             let h1 = Executor::spawn(async {
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -78,7 +78,7 @@ mod tests {
         //log_init(&LOG).unwrap();
         let handle = test_tcp_server();
 
-        Executor::build();
+        Executor::build(4);
         Executor::start(async move {
             let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
             let mut buf: [u8; 1] = [0u8; 1];

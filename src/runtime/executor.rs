@@ -4,7 +4,7 @@ use crate::task::note::Note;
 use crate::task::task::Task;
 use log::info;
 use slab::Slab;
-use std::sync::{Arc, Mutex, OnceLock, RwLock, atomic::AtomicBool, atomic::Ordering, mpsc};
+use std::sync::{Arc, OnceLock, RwLock, atomic::AtomicBool, atomic::Ordering, mpsc};
 
 use super::threads::ThreadPool;
 
@@ -45,7 +45,7 @@ pub struct Executor {
     handle: Arc<Handle>,
 
     // Thread pool
-    pool: Mutex<ThreadPool<Note>>,
+    pool: ThreadPool<Note>,
 }
 
 impl Executor {
@@ -78,13 +78,14 @@ impl Executor {
                 boolean.store(false, Ordering::SeqCst)
             }
         }
+
         Executor {
             storage: RwLock::new(Slab::with_capacity(4096)),
             chan,
             o_chan,
             reactor,
             handle,
-            pool: Mutex::new(ThreadPool::new(amnt, func)),
+            pool: ThreadPool::new(amnt, func).unwrap(),
         }
     }
 
@@ -113,8 +114,8 @@ impl Executor {
             let ready = task.poll();
 
             if ready {
-                exec.o_chan.s.send(Note(u64::MAX)).unwrap();
-                let _ = exec.pool.lock().unwrap().join();
+                exec.pool.broadcast(Note(u64::MAX));
+                let _ = exec.pool.join();
                 drop(task);
                 break;
             } else {
@@ -138,7 +139,7 @@ impl Executor {
 
         info!("registered task with id: {}", &note.0);
         // Handle properly.
-        let _ = exec.pool.lock().unwrap().deploy(note);
+        let _ = exec.pool.deploy(note);
         handle
     }
 }

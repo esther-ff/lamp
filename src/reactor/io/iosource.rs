@@ -1,5 +1,5 @@
-use mio::event::Event;
 use mio::Token;
+use mio::event::Event;
 use std::task::Waker;
 
 /// Represents a connection between a waker and the reactor
