@@ -3,10 +3,10 @@ use crate::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::reactor::reactor::Direction;
 use crate::runtime::Executor;
 
-use mio::Interest;
-use mio::Token;
 use mio::event::Source;
 use mio::net;
+use mio::Interest;
+use mio::Token;
 
 //use log::info;
 
@@ -36,6 +36,20 @@ macro_rules! handle_async_write {
             }
             Err(e) => Poll::Ready(Err(e)),
             Ok(size) => Poll::Ready(Ok(size)),
+        }
+    };
+}
+
+macro_rules! handle_async_flush {
+    ($io: expr, $cx: expr, $token: expr) => {
+        match (&$io).flush() {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                Executor::get_reactor().attach_waker($cx, $token, Direction::Write);
+                Poll::Pending
+            }
+
+            Err(e) => Poll::Ready(Err(e)),
+            Ok(_) => Poll::Ready(Ok(())),
         }
     };
 }
@@ -120,6 +134,10 @@ impl AsyncWrite for TcpStream {
     ) -> Poll<io::Result<usize>> {
         handle_async_write!(self.io, buf, cx, self.token)
     }
+
+    fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        handle_async_flush!(self.io, cx, self.token)
+    }
 }
 
 impl AsyncWrite for &TcpStream {
@@ -129,6 +147,10 @@ impl AsyncWrite for &TcpStream {
         buf: &'w [u8],
     ) -> Poll<io::Result<usize>> {
         handle_async_write!(self.io, buf, cx, self.token)
+    }
+
+    fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        handle_async_flush!(self.io, cx, self.token)
     }
 }
 

@@ -12,6 +12,10 @@ macro_rules! write_impl {
         ) -> Poll<Result<usize>> {
             Pin::new(&mut **self).poll_write(cx, buf)
         }
+
+        fn poll_flush<'f>(mut self: Pin<&mut Self>, cx: &mut Context<'f>) -> Poll<Result<()>> {
+            Pin::new(&mut **self).poll_flush(cx)
+        }
     };
 }
 pub trait AsyncWrite {
@@ -20,6 +24,8 @@ pub trait AsyncWrite {
         cx: &mut Context<'w>,
         buf: &[u8],
     ) -> Poll<Result<usize>>;
+
+    fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'f>) -> Poll<Result<()>>;
 }
 
 impl<T: ?Sized + AsyncWrite + Unpin> AsyncWrite for &mut T {
