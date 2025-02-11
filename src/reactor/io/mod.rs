@@ -13,3 +13,6 @@ pub use async_read::AsyncReadExt;
 pub mod async_write;
 pub use async_write::AsyncWrite;
 pub use async_write::AsyncWriteExt;
+
+mod read_write;
+pub(crate) use read_write::{ReadFut, WriteFut};

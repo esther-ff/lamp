@@ -9,5 +9,6 @@ edition = "2024"
 futures = "0.3.31"
 log = "0.4.25"
 mio = { version = "1.0.3", features = ["os-poll", "net"]}
+pin-project-lite = "0.2.16"
 proc-macro2 = "1.0.93"
 slab = "0.4.9"

@@ -7,7 +7,6 @@ pub use runtime::Executor;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reactor::io::{AsyncRead, AsyncWrite};
     use log::{Level, Metadata, Record};
 
     struct Logger;
@@ -72,6 +71,7 @@ mod tests {
 
     #[test]
     fn read_write_network() {
+        use crate::io::{AsyncReadExt, AsyncWriteExt};
         //static LOG: Logger = Logger;
 
         //log_init(&LOG).unwrap();
@@ -81,11 +81,11 @@ mod tests {
         Executor::start(async move {
             let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
             let mut buf: [u8; 1] = [0u8; 1];
-            stream.async_read(&mut buf).await.unwrap();
+            stream.read(&mut buf).await.unwrap();
 
             assert_eq!(buf[0], 1_u8);
 
-            stream.async_write(&buf).await.unwrap();
+            stream.write(&buf).await.unwrap();
             let value = handle.join().unwrap();
 
             assert_eq!(value, 1_u8);
