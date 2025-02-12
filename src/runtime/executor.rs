@@ -5,10 +5,13 @@ use crate::task::task::Task;
 use log::info;
 use slab::Slab;
 use std::sync::{Arc, OnceLock, RwLock, Weak, atomic::AtomicBool, atomic::Ordering, mpsc};
+use std::thread_local;
 
 use super::threads::ThreadPool;
 
-static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
+thread_local! {
+    static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
+}
 
 struct ChannelPair<T> {
     s: mpsc::Sender<T>,
@@ -102,16 +105,21 @@ impl Executor {
 
     pub fn new(amnt: usize) -> Executor {
         let runtime = Executor::new_base(amnt);
-        EXEC.set(Arc::downgrade(&runtime.handle));
+        EXEC.with(|cell| {
+            cell.set(Arc::downgrade(&runtime.handle))
+                .expect("failed setting global handle");
+        });
 
         runtime
     }
 
     pub fn get() -> Arc<ExecutorHandle> {
-        match EXEC.get().expect("runtime is not running").upgrade() {
-            None => panic!("runtime is gone"),
-            Some(handle) => handle,
-        }
+        EXEC.with(
+            |cell| match cell.get().expect("runtime is not running").upgrade() {
+                None => panic!("runtime is gone"),
+                Some(handle) => handle,
+            },
+        )
     }
 
     pub fn block_on<F>(&mut self, f: F)
@@ -130,6 +138,7 @@ impl Executor {
                 exec.pool.broadcast(Note(u64::MAX));
                 let _ = exec.pool.join();
                 drop(task);
+
                 break;
             } else {
                 let _ = exec.chan.r.recv();
@@ -154,8 +163,11 @@ impl Executor {
 
         info!("registered task with id: {}", &note.0);
 
-        // Handle properly.
-        let _ = exec.pool.deploy(note);
+        // If it fails, something terrible happened.
+        exec.pool
+            .deploy(note)
+            .expect("failed to send note to runtime");
+
         handle
     }
 }

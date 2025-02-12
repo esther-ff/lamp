@@ -51,25 +51,25 @@ mod tests {
         })
     }
 
-    // #[test]
-    // fn delayed_task() {
-    //     static LOG: Logger = Logger;
-    //     log_init(&LOG).unwrap();
+    #[test]
+    fn delayed_task() {
+        static LOG: Logger = Logger;
+        log_init(&LOG).unwrap();
 
-    //     let mut exec = Executor::new(4);
-    //     exec.block_on(async {
-    //         let h1 = Executor::spawn(async {
-    //             std::thread::sleep(std::time::Duration::from_millis(500));
-    //             println!("async task: hello after 500 ms!");
-    //             0
-    //         });
+        let mut exec = Executor::new(4);
+        exec.block_on(async {
+            let h1 = Executor::spawn(async {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                println!("async task: hello after 500 ms!");
+                0
+            });
 
-    //         let n = h1.await;
-    //         println!("Value: {n}");
+            let n = h1.await;
+            println!("Value: {n}");
 
-    //         println!("Guh");
-    //     });
-    // }
+            println!("Guh");
+        });
+    }
 
     #[test]
     fn read_write_network() {
