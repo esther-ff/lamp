@@ -58,31 +58,23 @@ fn send_note<F: Future + Send + 'static>(ptr: Ptr) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
 
     m.send_note();
-    info!("sent notif to runtime")
 }
 
 fn set_waker<F: Future + Send + 'static>(ptr: Ptr, waker: Option<Waker>) {
     let m: Mantle<F> = Mantle::from_raw(ptr);
 
     m.set_waker(waker);
-    info!("set waker of task")
 }
 
 fn ref_dec(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) };
 
-    let id = unsafe { (*ptr.as_ptr()).id };
-    info!(
-        "decremented ref count (id: {id}), past: {}, curr: {}",
-        output,
-        output - 1
-    );
+    let _id = unsafe { (*ptr.as_ptr()).id };
     output - 1
 }
 fn ref_inc(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) };
 
-    let id = unsafe { (*ptr.as_ptr()).id };
-    info!("incremented ref count (id: {id}), curr: {}", output + 1);
+    let _id = unsafe { (*ptr.as_ptr()).id };
     output + 1
 }

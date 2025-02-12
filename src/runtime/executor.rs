@@ -4,11 +4,11 @@ use crate::task::note::Note;
 use crate::task::task::Task;
 use log::info;
 use slab::Slab;
-use std::sync::{Arc, OnceLock, RwLock, atomic::AtomicBool, atomic::Ordering, mpsc};
+use std::sync::{Arc, OnceLock, RwLock, Weak, atomic::AtomicBool, atomic::Ordering, mpsc};
 
 use super::threads::ThreadPool;
 
-static EXEC: OnceLock<Executor> = OnceLock::new();
+static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
 
 struct ChannelPair<T> {
     s: mpsc::Sender<T>,
@@ -26,18 +26,12 @@ impl<T> ChannelPair<T> {
     }
 }
 
-pub struct Executor {
+pub struct ExecutorHandle {
     // Task queue
     storage: RwLock<Slab<Task>>,
 
     // Channels for the main thread.
     chan: ChannelPair<Note>,
-
-    // Channels for other threads.
-    o_chan: ChannelPair<Note>,
-
-    // I/O Reactor
-    reactor: Reactor,
 
     // Might be useful later
     // Handle to reactor
@@ -46,12 +40,28 @@ pub struct Executor {
 
     // Thread pool
     pool: ThreadPool<Note>,
+
+    // I/O Reactor
+    reactor: Reactor,
+}
+
+impl ExecutorHandle {
+    pub(crate) fn reactor_fn<F, T>(self: &Arc<Self>, f: F) -> T
+    where
+        F: FnOnce(&Reactor) -> T,
+    {
+        f(&self.reactor)
+    }
+}
+
+pub struct Executor {
+    /// Handle to the Executor,
+    handle: Arc<ExecutorHandle>,
 }
 
 impl Executor {
-    fn new(amnt: usize) -> Executor {
+    fn new_base(amnt: usize) -> Executor {
         let chan = ChannelPair::new();
-        let o_chan = ChannelPair::new();
         let (reactor, handle) = Reactor::new();
 
         fn func(r: mpsc::Receiver<Note>, boolean: Arc<AtomicBool>) {
@@ -62,15 +72,15 @@ impl Executor {
                     break;
                 }
 
-                let storage = Executor::get().storage.read().unwrap();
+                let rt = Executor::get();
 
+                let storage = rt.storage.read().unwrap();
                 let task = storage.get(n.0 as usize).unwrap();
                 let ready = task.poll();
-                dbg!(ready);
                 drop(storage);
 
                 if ready {
-                    let mut st = Executor::get().storage.write().unwrap();
+                    let mut st = rt.storage.write().unwrap();
                     let _ = st.remove(n.0 as usize);
                     info!("removed task (id: {})", n.0);
                 }
@@ -79,29 +89,32 @@ impl Executor {
             }
         }
 
-        Executor {
+        let handle = Arc::new(ExecutorHandle {
             storage: RwLock::new(Slab::with_capacity(4096)),
             chan,
-            o_chan,
-            reactor,
             handle,
             pool: ThreadPool::new(amnt, func).unwrap(),
+            reactor,
+        });
+
+        Executor { handle }
+    }
+
+    pub fn new(amnt: usize) -> Executor {
+        let runtime = Executor::new_base(amnt);
+        EXEC.set(Arc::downgrade(&runtime.handle));
+
+        runtime
+    }
+
+    pub fn get() -> Arc<ExecutorHandle> {
+        match EXEC.get().expect("runtime is not running").upgrade() {
+            None => panic!("runtime is gone"),
+            Some(handle) => handle,
         }
     }
 
-    pub fn build(amnt: usize) {
-        EXEC.get_or_init(|| Executor::new(amnt));
-    }
-
-    pub fn get() -> &'static Executor {
-        EXEC.get().expect("runtime is not running")
-    }
-
-    pub fn get_reactor() -> &'static Reactor {
-        &Executor::get().reactor
-    }
-
-    pub fn start<F>(f: F)
+    pub fn block_on<F>(&mut self, f: F)
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
@@ -123,6 +136,8 @@ impl Executor {
             }
         }
     }
+
+    /// Spawn a future onto the Runtime.
     pub fn spawn<F>(f: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,
@@ -138,8 +153,13 @@ impl Executor {
         drop(storage);
 
         info!("registered task with id: {}", &note.0);
+
         // Handle properly.
         let _ = exec.pool.deploy(note);
         handle
     }
+}
+
+impl std::ops::Drop for Executor {
+    fn drop(&mut self) {}
 }

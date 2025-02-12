@@ -84,9 +84,9 @@ impl Reactor {
 
                 for event in events.iter() {
                     println!("{:?}", event);
-                    let srcs = arc_sources.lock().expect("sources lock in loop failed!");
+                    let mut srcs = arc_sources.lock().expect("sources lock in loop failed!");
 
-                    let src = match srcs.get(event.token().0) {
+                    let src = match srcs.get_mut(event.token().0) {
                         None => panic!(
                             "Received event for token {}, but no such source is present.",
                             event.token().0
@@ -131,19 +131,26 @@ impl Reactor {
             None => panic!("Trying to attach waker to an unregistered source!"),
         };
 
+        // match dir {
+        //     Direction::Read => {
+        //         let cur_waker = src.get_read_waker();
+        //         match cur_waker {
+        //             None => src.change_read_waker(cx.waker()),
+        //             Some(waker) => {
+        //                 if !waker.will_wake(cx.waker()) {
+        //                     src.change_read_waker(cx.waker());
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     Direction::Write => src.change_write_waker(cx.waker()),
+        // }
+
         match dir {
-            Direction::Read => {
-                let cur_waker = src.get_read_waker();
-                match cur_waker {
-                    None => src.change_read_waker(cx.waker()),
-                    Some(waker) => {
-                        if !waker.will_wake(cx.waker()) {
-                            src.change_read_waker(cx.waker());
-                        }
-                    }
-                }
-            }
-            Direction::Write => src.change_write_waker(cx.waker()),
+            Direction::Read => src.put_read_waker(cx.waker()),
+            Direction::Write => src.put_write_waker(cx.waker()),
         }
+
+        drop(sources);
     }
 }

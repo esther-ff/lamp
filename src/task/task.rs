@@ -55,7 +55,6 @@ impl std::ops::Drop for Task {
         // This decreases the ref count
         // and destroys the pointer if it is 0.
         self.raw.ref_destroy();
-        //info!("Dropped task id: {}", self.raw.header().id)
     }
 }
 

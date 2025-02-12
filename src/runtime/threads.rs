@@ -140,7 +140,6 @@ impl<Notif: Send + 'static> ThreadPool<Notif> {
         };
 
         loop {
-            println!("Guh");
             if pool.workers.len() == amnt {
                 break;
             }
@@ -190,8 +189,6 @@ impl<Notif: Send + 'static> ThreadPool<Notif> {
                 };
             });
 
-        dbg!(&self.workers);
-        dbg!(chosen);
         self.workers
             .get(chosen)
             .expect("expected a worker here")

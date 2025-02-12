@@ -3,10 +3,10 @@ use crate::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::reactor::reactor::Direction;
 use crate::runtime::Executor;
 
-use mio::event::Source;
-use mio::net;
 use mio::Interest;
 use mio::Token;
+use mio::event::Source;
+use mio::net;
 
 //use log::info;
 
@@ -18,7 +18,7 @@ macro_rules! handle_async_read {
     ($io: expr, $buf: expr, $cx: expr, $token: expr) => {
         match (&$io).read($buf) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get_reactor().attach_waker($cx, $token, Direction::Read);
+                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Read));
                 Poll::Pending
             }
             Err(e) => Poll::Ready(Err(e)),
@@ -31,7 +31,7 @@ macro_rules! handle_async_write {
     ($io: expr, $buf: expr, $cx: expr, $token: expr) => {
         match (&$io).write($buf) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get_reactor().attach_waker($cx, $token, Direction::Write);
+                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
                 Poll::Pending
             }
             Err(e) => Poll::Ready(Err(e)),
@@ -44,7 +44,7 @@ macro_rules! handle_async_flush {
     ($io: expr, $cx: expr, $token: expr) => {
         match (&$io).flush() {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get_reactor().attach_waker($cx, $token, Direction::Write);
+                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
                 Poll::Pending
             }
 
@@ -64,8 +64,6 @@ pub struct TcpStream {
 impl TcpStream {
     /// Create a new TcpStream.
     pub fn new(addr: &str) -> io::Result<TcpStream> {
-        let reactor = Executor::get_reactor();
-
         let address = match addr.parse() {
             Ok(o) => o,
             Err(_e) => return Err(io::Error::new(io::ErrorKind::NotFound, "invalid address")),
@@ -77,11 +75,14 @@ impl TcpStream {
         // mio specifies that you should do more checks
         // i shall do them once day.
 
-        let n = reactor.register(&mut tcp, Interest::READABLE | Interest::WRITABLE)?;
+        let handle = Executor::get();
+
+        let result =
+            handle.reactor_fn(|r| r.register(&mut tcp, Interest::READABLE | Interest::WRITABLE));
 
         Ok(Self {
             io: tcp,
-            token: Token(n),
+            token: Token(result?),
         })
     }
 }

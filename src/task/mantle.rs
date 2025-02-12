@@ -58,10 +58,7 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn wake_handle(self) {
         let waker = self.core().tail().h_waker.lock().unwrap();
         if let Some(w) = waker.as_ref() {
-            info!("woke up waker id: {}", self.core().header().id);
             w.wake_by_ref();
-        } else {
-            warn!("no waker! id: {}", self.core().header().id);
         }
     }
 
@@ -74,7 +71,6 @@ impl<F: Future + Send + 'static> Mantle<F> {
     pub(crate) fn send_note(self) {
         let header = self.core().header();
 
-        println!("header id: {}", header.id);
         header.sender.send(Note(header.id)).unwrap();
     }
 }
