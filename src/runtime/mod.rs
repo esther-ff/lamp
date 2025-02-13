@@ -1,6 +1,6 @@
 pub(crate) mod executor;
 
-pub use executor::Executor;
+pub use executor::{Executor, ExecutorHandle};
 
 pub(crate) mod threads;
 

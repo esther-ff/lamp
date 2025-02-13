@@ -1,11 +1,14 @@
+use crate::runtime::{Executor, ExecutorHandle};
 use log::{error, info, warn};
 use slab::Slab;
 use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
-use std::io;
+use std::io::{self, Seek};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, atomic, atomic::Ordering, mpsc};
+use std::sync::{Arc, Weak, atomic, atomic::Ordering, mpsc};
 use std::thread::{self, available_parallelism};
+
+type ThreadFn<T> = fn(Weak<ExecutorHandle>, mpsc::Receiver<T>, Arc<AtomicBool>);
 
 pub(crate) struct WorkerThread<T: Send + 'static> {
     // Is it currently occupied
@@ -22,10 +25,13 @@ pub(crate) struct WorkerThread<T: Send + 'static> {
     handle: Cell<Option<thread::JoinHandle<()>>>,
 
     // Backup of the function used to run the thread.
-    func: fn(mpsc::Receiver<T>, Arc<AtomicBool>),
+    func: ThreadFn<T>,
 
     // Is the thread okay?
     ok: bool,
+
+    // Handle to runtime.
+    rt: Weak<ExecutorHandle>,
 }
 
 impl<T: Send + 'static> Debug for WorkerThread<T> {
@@ -42,7 +48,7 @@ impl<T: Send + 'static> Debug for WorkerThread<T> {
 }
 
 impl<T: Send + 'static> WorkerThread<T> {
-    pub(crate) fn new(func: fn(mpsc::Receiver<T>, Arc<AtomicBool>)) -> Self {
+    pub(crate) fn new(func: ThreadFn<T>, rt: Weak<ExecutorHandle>) -> Self {
         let (sender, receiver) = mpsc::channel();
         let arc_bool = Arc::new(AtomicBool::new(false));
 
@@ -54,6 +60,7 @@ impl<T: Send + 'static> WorkerThread<T> {
             handle: Cell::new(None),
             func,
             ok: true,
+            rt,
         }
     }
 
@@ -61,8 +68,9 @@ impl<T: Send + 'static> WorkerThread<T> {
         let clone = Arc::clone(&self.occupied);
         let func = self.func.clone();
         let receiver = self.receiver.take().unwrap();
+        let rt = self.rt.clone();
 
-        let handle = thread::Builder::new().spawn(move || func(receiver, clone))?;
+        let handle = thread::Builder::new().spawn(move || func(rt, receiver, clone))?;
 
         self.handle.set(Some(handle));
         Ok(())
@@ -90,12 +98,13 @@ impl<T: Send + 'static> WorkerThread<T> {
         let (sender, receiver) = mpsc::channel();
         let clone = Arc::clone(&self.occupied);
         let func = self.func.clone();
+        let rt = self.rt.clone();
 
         self.sender = sender;
         self.tasks_received = AtomicU64::new(0);
         self.occupied.swap(false, atomic::Ordering::SeqCst);
 
-        let handle = Some(thread::spawn(move || func(receiver, clone)));
+        let handle = Some(thread::spawn(move || func(rt, receiver, clone)));
         self.handle.set(handle);
     }
 }
@@ -103,6 +112,7 @@ impl<T: Send + 'static> WorkerThread<T> {
 pub(crate) struct ThreadPool<Notif: Send + 'static> {
     workers: Slab<WorkerThread<Notif>>,
     occupied: Slab<WorkerThread<Notif>>,
+    pub(crate) amount: usize,
 }
 
 impl<Notif: Send + 'static + Copy> ThreadPool<Notif> {
@@ -126,39 +136,40 @@ impl<Notif: Send + 'static + Clone> ThreadPool<Notif> {
 }
 
 impl<Notif: Send + 'static> ThreadPool<Notif> {
-    pub(crate) fn new(
-        amnt: usize,
-        f: fn(mpsc::Receiver<Notif>, Arc<AtomicBool>),
-    ) -> io::Result<Self> {
-        let cores = available_parallelism().expect("failed to check cpu thread count");
-        let not_overflow = amnt <= cores.into();
-        assert!(not_overflow);
+    pub(crate) fn new(amount: usize) -> Self {
+        // let cores = available_parallelism().expect("failed to check cpu thread count");
+        // assert!(amount <= cores.into());
 
-        let mut pool = Self {
-            workers: Slab::with_capacity(amnt),
+        Self {
+            workers: Slab::with_capacity(amount),
             occupied: Slab::new(),
-        };
+            amount,
+        }
+    }
+    pub(crate) fn start(&mut self, amnt: usize, f: ThreadFn<Notif>) -> io::Result<()> {
+        let rt = Executor::get();
 
         loop {
-            if pool.workers.len() == amnt {
+            if self.workers.len() == amnt {
                 break;
             }
 
             info!("creating thread");
-            let mut th = WorkerThread::new(f);
+            let mut th = WorkerThread::new(f, Arc::downgrade(&rt.clone()));
 
             if th.start().is_err() {
                 // returns a pool with a reduced size
                 // however the state is okay.
                 error!("fail during population of the pool, giving back a incomplete pool");
+
+                self.workers.shrink_to_fit();
                 break;
+            } else {
+                self.workers.insert(th);
             }
-            pool.workers.insert(th);
         }
 
-        pool.workers.shrink_to_fit();
-
-        Ok(pool)
+        Ok(())
     }
 
     /// Deploys a task to a chosen worker.
@@ -216,6 +227,16 @@ impl<T: Send + 'static> std::ops::Drop for ThreadPool<T> {
             // Result is ignored because we are dropping the pool.
             let _ = v.join();
         });
+
+        self.workers.drain();
+
+        debug_assert!(self.workers.is_empty());
+    }
+}
+
+impl<T: Send + 'static> std::ops::Drop for WorkerThread<T> {
+    fn drop(&mut self) {
+        println!("dropped worker!!")
     }
 }
 

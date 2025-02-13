@@ -1,11 +1,16 @@
 use super::IoSource;
+
 use mio::event::Source;
 use mio::{Events, Interest, Poll, Registry, Token};
-use slab::Slab;
+
 use std::io::Result as IoResult;
 use std::sync::{Arc, Mutex};
 use std::task::Context;
+use std::thread;
 
+use slab::Slab;
+
+const SHUTDOWN: Token = Token(usize::MAX);
 /// represents the interest of the underlying io.
 pub enum Direction {
     Read,
@@ -33,73 +38,97 @@ pub struct Handle {
 
     /// Poll from which we obtain events.
     poll: Mutex<Poll>,
+
+    /// Waker to wake up the thread.
+    waker: mio::Waker,
 }
 
 impl Handle {
-    pub fn registry(&self) -> &Registry {
+    pub(crate) fn registry(&self) -> &Registry {
         &self.registry
     }
 
-    fn arc_new(registry: Registry, poll: Poll) -> Arc<Handle> {
+    pub(crate) fn shutdown(&self) -> IoResult<()> {
+        self.waker.wake()
+    }
+
+    fn arc_new(registry: Registry, poll: Poll, waker: mio::Waker) -> Arc<Handle> {
         Arc::new(Handle {
             registry,
             poll: Mutex::new(poll),
+            waker,
         })
     }
 }
 
 impl Reactor {
     /// Create a new Reactor
-    pub fn new() -> (Reactor, Arc<Handle>) {
+    pub fn new() -> IoResult<(Reactor, Arc<Handle>)> {
         let poll = Poll::new().expect("failed to create poll");
+
         let events = Arc::new(Mutex::new(Events::with_capacity(1024)));
         let registry = poll.registry().try_clone().expect("registry clone fail");
         let sources = Arc::new(Mutex::new(Slab::with_capacity(1024)));
+        let waker = mio::Waker::new(&registry, SHUTDOWN)?;
+        let handle = Handle::arc_new(registry, poll, waker);
 
-        let handle = Handle::arc_new(registry, poll);
         let r = Reactor {
             sources,
             events,
             handle,
         };
         let arc_handle = Arc::clone(&r.handle);
-        (r, arc_handle)
+        Ok((r, arc_handle))
     }
 
-    /// Get reference to the global Reactor instance.
-    pub fn start(&self) {
+    /// Get reference to the Reactor.
+    pub fn start(&self) -> IoResult<thread::JoinHandle<()>> {
         // Polling thread
         let arc_events = Arc::clone(&self.events);
         let arc_sources = Arc::clone(&self.sources);
         let handle = Arc::clone(&self.handle);
-        std::thread::spawn(move || {
-            let mut poll = handle.poll.lock().expect("failed loop poll lock");
-            let mut events = arc_events.lock().expect("event lock fail");
 
-            loop {
-                match poll.poll(&mut events, None) {
-                    Ok(_) => {}
-                    Err(e) => panic!("Error: {:?}", e),
-                }
+        let handle = thread::Builder::new()
+            .name("IoReactor".to_string())
+            .spawn(move || {
+                let mut poll = handle.poll.lock().expect("failed loop poll lock");
+                let mut events = arc_events.lock().expect("event lock fail");
 
-                for event in events.iter() {
-                    println!("{:?}", event);
-                    let mut srcs = arc_sources.lock().expect("sources lock in loop failed!");
+                loop {
+                    match poll.poll(&mut events, None) {
+                        Ok(_) => {}
+                        Err(e) => panic!("Error: {:?}", e),
+                    }
 
-                    let src = match srcs.get_mut(event.token().0) {
-                        None => panic!(
-                            "Received event for token {}, but no such source is present.",
-                            event.token().0
-                        ),
-                        Some(source) => source,
-                    };
+                    for event in events.iter() {
+                        println!("{:?}", event);
 
-                    if src.has_wakers() {
-                        src.wake_with_event(event)
+                        match event.token() {
+                            SHUTDOWN => {
+                                return;
+                            }
+
+                            _ => {
+                                let mut srcs = arc_sources.lock().expect("sources lock in loop failed!");
+
+                                let src = match srcs.get_mut(event.token().0) {
+                                    None => panic!(
+                                        "Received event for token {}, but no such source is present.",
+                                        event.token().0
+                                    ),
+                                    Some(source) => source,
+                                };
+
+                                if src.has_wakers() {
+                                    src.wake_with_event(event)
+                                };
+                            },
+                        };
                     }
                 }
-            }
-        });
+            })?;
+
+        Ok(handle)
     }
 
     /// Obtains handle from a reactor.
@@ -153,4 +182,6 @@ impl Reactor {
 
         drop(sources);
     }
+
+    fn turn(&self) {}
 }

@@ -4,7 +4,11 @@ use crate::task::note::Note;
 use crate::task::task::Task;
 use log::info;
 use slab::Slab;
+use std::cell::{Cell, UnsafeCell};
+use std::mem::MaybeUninit;
+use std::ptr::addr_of_mut;
 use std::sync::{Arc, OnceLock, RwLock, Weak, atomic::AtomicBool, atomic::Ordering, mpsc};
+use std::thread::JoinHandle;
 use std::thread_local;
 
 use super::threads::ThreadPool;
@@ -42,74 +46,79 @@ pub struct ExecutorHandle {
     handle: Arc<Handle>,
 
     // Thread pool
-    pool: ThreadPool<Note>,
+    pool: UnsafeCell<ThreadPool<Note>>,
 
     // I/O Reactor
     reactor: Reactor,
 }
 
+unsafe impl Sync for ExecutorHandle {}
+unsafe impl Send for ExecutorHandle {}
+
 impl ExecutorHandle {
-    pub(crate) fn reactor_fn<F, T>(self: &Arc<Self>, f: F) -> T
+    pub(crate) fn reactor_fn<F, T>(self: Arc<Self>, f: F) -> T
     where
         F: FnOnce(&Reactor) -> T,
     {
         f(&self.reactor)
+    }
+
+    pub(crate) fn pool_fn<F, T>(self: Arc<Self>, function: F) -> T
+    where
+        F: FnOnce(&ThreadPool<Note>) -> T,
+    {
+        function(unsafe { &*self.pool.get() })
     }
 }
 
 pub struct Executor {
     /// Handle to the Executor,
     handle: Arc<ExecutorHandle>,
+
+    /// JoinHandle for the Reactor's thread.
+    reactor_handle: MaybeUninit<JoinHandle<()>>,
 }
 
 impl Executor {
     fn new_base(amnt: usize) -> Executor {
         let chan = ChannelPair::new();
-        let (reactor, handle) = Reactor::new();
-
-        fn func(r: mpsc::Receiver<Note>, boolean: Arc<AtomicBool>) {
-            while let Ok(n) = r.recv() {
-                boolean.store(true, Ordering::SeqCst);
-
-                if n.0 == u64::MAX {
-                    break;
-                }
-
-                let rt = Executor::get();
-
-                let storage = rt.storage.read().unwrap();
-                let task = storage.get(n.0 as usize).unwrap();
-                let ready = task.poll();
-                drop(storage);
-
-                if ready {
-                    let mut st = rt.storage.write().unwrap();
-                    let _ = st.remove(n.0 as usize);
-                    info!("removed task (id: {})", n.0);
-                }
-
-                boolean.store(false, Ordering::SeqCst)
-            }
-        }
+        let (reactor, handle) = Reactor::new().expect("failed to create reactor");
 
         let handle = Arc::new(ExecutorHandle {
             storage: RwLock::new(Slab::with_capacity(4096)),
             chan,
             handle,
-            pool: ThreadPool::new(amnt, func).unwrap(),
+            pool: UnsafeCell::new(ThreadPool::new(amnt)),
             reactor,
         });
 
-        Executor { handle }
+        Executor {
+            handle,
+            reactor_handle: MaybeUninit::uninit(),
+        }
     }
 
     pub fn new(amnt: usize) -> Executor {
-        let runtime = Executor::new_base(amnt);
+        let mut runtime = Executor::new_base(amnt);
         EXEC.with(|cell| {
             cell.set(Arc::downgrade(&runtime.handle))
                 .expect("failed setting global handle");
         });
+        unsafe {
+            let amnt = (*runtime.handle.pool.get()).amount;
+            (*runtime.handle.pool.get())
+                .start(amnt, thread_function)
+                .expect("failed to start thread pool");
+        };
 
+        let handle = runtime
+            .handle
+            .reactor
+            .start()
+            .expect("failed to start reactor");
+
+        let ptr = runtime.reactor_handle.as_mut_ptr();
+        unsafe { ptr.write(handle) };
         runtime
     }
 
@@ -128,15 +137,13 @@ impl Executor {
         F::Output: Send + 'static,
     {
         let exec = Executor::get();
-        exec.reactor.start();
+
         let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
 
         loop {
             let ready = task.poll();
 
             if ready {
-                exec.pool.broadcast(Note(u64::MAX));
-                let _ = exec.pool.join();
                 drop(task);
 
                 break;
@@ -144,6 +151,17 @@ impl Executor {
                 let _ = exec.chan.r.recv();
             }
         }
+    }
+
+    pub fn shutdown(self) {
+        let exec = Executor::get();
+        let _ = exec.handle.shutdown();
+        exec.pool_fn(|pool| {
+            let _ = pool.broadcast(Note(u64::MAX));
+            let _ = pool.join();
+        });
+
+        dbg!(Arc::strong_count(&self.handle));
     }
 
     /// Spawn a future onto the Runtime.
@@ -164,8 +182,7 @@ impl Executor {
         info!("registered task with id: {}", &note.0);
 
         // If it fails, something terrible happened.
-        exec.pool
-            .deploy(note)
+        exec.pool_fn(|pool| pool.deploy(note))
             .expect("failed to send note to runtime");
 
         handle
@@ -174,4 +191,38 @@ impl Executor {
 
 impl std::ops::Drop for Executor {
     fn drop(&mut self) {}
+}
+
+fn thread_function(
+    rt_weak: Weak<ExecutorHandle>,
+    r: mpsc::Receiver<Note>,
+    boolean: Arc<AtomicBool>,
+) {
+    while let Ok(n) = r.recv() {
+        boolean.store(true, Ordering::SeqCst);
+
+        let rt = match rt_weak.upgrade() {
+            // The runtime has been dropped.
+            None => break,
+
+            Some(rt) => rt,
+        };
+
+        if n.0 == u64::MAX {
+            break;
+        }
+
+        let storage = rt.storage.read().unwrap();
+        let task = storage.get(n.0 as usize).unwrap();
+        let ready = task.poll();
+        drop(storage);
+
+        if ready {
+            let mut st = rt.storage.write().unwrap();
+            let _ = st.remove(n.0 as usize);
+            info!("removed task (id: {})", n.0);
+        }
+
+        boolean.store(false, Ordering::SeqCst)
+    }
 }
