@@ -104,6 +104,7 @@ impl Executor {
             cell.set(Arc::downgrade(&runtime.handle))
                 .expect("failed setting global handle");
         });
+
         unsafe {
             let amnt = (*runtime.handle.pool.get()).amount;
             (*runtime.handle.pool.get())
@@ -119,6 +120,7 @@ impl Executor {
 
         let ptr = runtime.reactor_handle.as_mut_ptr();
         unsafe { ptr.write(handle) };
+
         runtime
     }
 
@@ -144,8 +146,6 @@ impl Executor {
             let ready = task.poll();
 
             if ready {
-                drop(task);
-
                 break;
             } else {
                 let _ = exec.chan.r.recv();
@@ -153,7 +153,7 @@ impl Executor {
         }
     }
 
-    pub fn shutdown(self) {
+    pub fn shutdown(mut self) {
         let exec = Executor::get();
         let _ = exec.handle.shutdown();
         exec.pool_fn(|pool| {
@@ -162,6 +162,8 @@ impl Executor {
         });
 
         dbg!(Arc::strong_count(&self.handle));
+
+        unsafe { self.reactor_handle.assume_init_drop() };
     }
 
     /// Spawn a future onto the Runtime.

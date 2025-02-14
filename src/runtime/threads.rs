@@ -235,9 +235,7 @@ impl<T: Send + 'static> std::ops::Drop for ThreadPool<T> {
 }
 
 impl<T: Send + 'static> std::ops::Drop for WorkerThread<T> {
-    fn drop(&mut self) {
-        println!("dropped worker!!")
-    }
+    fn drop(&mut self) {}
 }
 
 unsafe impl<T: Send> Send for ThreadPool<T> {}

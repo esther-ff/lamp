@@ -39,7 +39,7 @@ impl<T: std::fmt::Debug> Future for TaskHandle<T> {
 
 impl<T> std::ops::Drop for TaskHandle<T> {
     fn drop(&mut self) {
-        info!("dropped handle id: {}", self.raw.header().id);
+        //info!("dropped handle id: {}", self.raw.header().id);
         self.raw.ref_destroy();
     }
 }
