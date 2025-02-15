@@ -1,4 +1,6 @@
+use crate::io::TokenBearer;
 use crate::io::WriteFut;
+
 use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -36,6 +38,13 @@ impl<T: ?Sized + AsyncWrite + Unpin> AsyncWrite for Box<T> {
     write_impl!();
 }
 
-pub trait AsyncWriteExt {
-    fn write<'w>(&'w mut self, buf: &'w [u8]) -> WriteFut<'w, Self>;
+pub trait AsyncWriteExt: AsyncWrite {
+    fn write<'w>(&'w mut self, buf: &'w [u8]) -> WriteFut<'w, Self>
+    where
+        Self: Unpin + AsyncWrite + TokenBearer,
+    {
+        WriteFut::new(self, buf, self.get_token())
+    }
 }
+
+impl<Io: AsyncWrite + ?Sized> AsyncWriteExt for Io {}

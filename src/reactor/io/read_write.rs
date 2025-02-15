@@ -62,7 +62,7 @@ impl<'w, IO: AsyncWrite + Unpin + ?Sized> WriteFut<'w, IO> {
     }
 }
 
-impl<'w, IO: AsyncWrite + Unpin + ?Sized> ReadFut<'w, IO> {
+impl<'w, IO: AsyncRead + Unpin + ?Sized> ReadFut<'w, IO> {
     pub(crate) fn new(io: &'w mut IO, buf: &'w mut [u8], token: Token) -> ReadFut<'w, IO> {
         ReadFut {
             io,

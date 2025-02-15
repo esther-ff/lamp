@@ -16,3 +16,6 @@ pub use async_write::AsyncWriteExt;
 
 mod read_write;
 pub(crate) use read_write::{ReadFut, WriteFut};
+
+mod token_trait;
+pub use token_trait::TokenBearer;

@@ -72,27 +72,27 @@ mod tests {
 
         exec.shutdown();
     }
-    // #[test]
-    // fn read_write_network() {
-    //     use crate::io::{AsyncReadExt, AsyncWriteExt};
-    //     //static LOG: Logger = Logger;
+    #[test]
+    fn read_write_network() {
+        use crate::io::{AsyncReadExt, AsyncWriteExt};
+        //static LOG: Logger = Logger;
 
-    //     //log_init(&LOG).unwrap();
-    //     let handle = test_tcp_server();
-    //     let mut exec = Executor::new(4);
-    //     exec.block_on(async move {
-    //         let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
-    //         let mut buf: [u8; 1] = [0u8; 1];
-    //         stream.read(&mut buf).await.unwrap();
+        //log_init(&LOG).unwrap();
+        let handle = test_tcp_server();
+        let mut exec = Executor::new(4);
+        exec.block_on(async move {
+            let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
+            let mut buf: [u8; 1] = [0u8; 1];
+            stream.read(&mut buf).await.unwrap();
 
-    //         assert_eq!(buf[0], 1_u8);
+            assert_eq!(buf[0], 1_u8);
 
-    //         stream.write(&buf).await.unwrap();
-    //         let value = handle.join().unwrap();
+            stream.write(&buf).await.unwrap();
+            let value = handle.join().unwrap();
 
-    //         assert_eq!(value, 1_u8);
-    //     });
+            assert_eq!(value, 1_u8);
+        });
 
-    //     exec.shutdown();
-    // }
+        exec.shutdown();
+    }
 }

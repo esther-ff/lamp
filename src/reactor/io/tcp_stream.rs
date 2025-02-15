@@ -1,3 +1,4 @@
+use crate::io::TokenBearer;
 use crate::io::read_write::{ReadFut, WriteFut};
 use crate::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::reactor::reactor::Direction;
@@ -87,6 +88,12 @@ impl TcpStream {
     }
 }
 
+impl TokenBearer for TcpStream {
+    fn get_token(&self) -> Token {
+        self.token
+    }
+}
+
 impl AsyncRead for TcpStream {
     /// Read x amount of bytes from this socket.
     /// It's asynchronous woo!!
@@ -108,22 +115,6 @@ impl AsyncRead for &TcpStream {
         buf: &'a mut [u8],
     ) -> Poll<io::Result<usize>> {
         handle_async_read!(self.io, buf, cx, self.token)
-    }
-}
-
-impl AsyncReadExt for TcpStream {
-    /// Read x amount of bytes into `buf` from this socket asychronously.
-    /// Returns a `Future` with `io::Result<usize>` as it's Output type.
-    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> ReadFut<'a, Self> {
-        ReadFut::new(self, buf, self.token)
-    }
-}
-
-impl AsyncReadExt for &TcpStream {
-    /// Read x amount of bytes into `buf` from this socket asychronously.
-    /// Returns a `Future` with `io::Result<usize>` as it's Output type.
-    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> ReadFut<'a, Self> {
-        ReadFut::new(self, buf, self.token)
     }
 }
 
@@ -152,22 +143,6 @@ impl AsyncWrite for &TcpStream {
 
     fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         handle_async_flush!(self.io, cx, self.token)
-    }
-}
-
-impl AsyncWriteExt for TcpStream {
-    /// Writes x amount of bytes from `buf` to this socket asychronously
-    /// Returns a `Future` with `io::Result<usize>` as it's Output type.
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> WriteFut<'a, Self> {
-        WriteFut::new(self, buf, self.token)
-    }
-}
-
-impl AsyncWriteExt for &TcpStream {
-    /// Writes x amount of bytes from `buf` to this asychronously
-    /// Returns a `Future` with `io::Result<usize>` as it's Output type
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> WriteFut<'a, Self> {
-        WriteFut::new(self, buf, self.token)
     }
 }
 
