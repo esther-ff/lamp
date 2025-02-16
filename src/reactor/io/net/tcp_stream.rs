@@ -1,6 +1,5 @@
 use crate::io::TokenBearer;
-use crate::io::read_write::{ReadFut, WriteFut};
-use crate::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use crate::io::{AsyncRead, AsyncWrite};
 use crate::reactor::reactor::Direction;
 use crate::runtime::Executor;
 
