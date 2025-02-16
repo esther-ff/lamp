@@ -29,6 +29,17 @@ impl<'o, IO: AsyncRead + Unpin + ?Sized> Future for ReadFut<'o, IO> {
     }
 }
 
+impl<'w, IO: AsyncRead + Unpin + ?Sized> ReadFut<'w, IO> {
+    pub(crate) fn new(io: &'w mut IO, buf: &'w mut [u8], token: Token) -> ReadFut<'w, IO> {
+        ReadFut {
+            io,
+            buf,
+            token,
+            _pin: PhantomPinned,
+        }
+    }
+}
+
 pin_project! {
     /// Future representing an asynchronous write.
     pub struct WriteFut<'o, IO: ?Sized> {
@@ -62,13 +73,31 @@ impl<'w, IO: AsyncWrite + Unpin + ?Sized> WriteFut<'w, IO> {
     }
 }
 
-impl<'w, IO: AsyncRead + Unpin + ?Sized> ReadFut<'w, IO> {
-    pub(crate) fn new(io: &'w mut IO, buf: &'w mut [u8], token: Token) -> ReadFut<'w, IO> {
-        ReadFut {
+pin_project! {
+    /// Future representing an asynchronous flush.
+    pub(crate) struct FlushFut<'f, IO: ?Sized> {
+        io: &'f mut IO,
+        token: Token,
+        _pin: PhantomPinned,
+    }
+}
+
+impl<'f, IO: AsyncWrite + Unpin + ?Sized> FlushFut<'f, IO> {
+    pub(crate) fn new(io: &'f mut IO, token: Token) -> Self {
+        Self {
             io,
-            buf,
             token,
             _pin: PhantomPinned,
         }
+    }
+}
+
+impl<IO: AsyncWrite + Unpin + ?Sized> Future for FlushFut<'_, IO> {
+    type Output = io::Result<()>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let pinned = self.project();
+
+        Pin::new(pinned.io).poll_flush(cx)
     }
 }

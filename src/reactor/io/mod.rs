@@ -1,21 +1,11 @@
-mod iosource;
+mod io_source;
+pub(crate) use io_source::IoSource;
 
-/// TcpStream struct.
-pub use tcp_stream::TcpStream;
-mod tcp_stream;
+mod net;
+pub use net::TcpStream;
 
-/// Trait for asychronous reads.
-pub mod async_read;
-pub use async_read::AsyncRead;
-pub use async_read::AsyncReadExt;
+mod traits;
+pub use traits::*;
 
-/// Trait for asynchronous writes.
-pub mod async_write;
-pub use async_write::AsyncWrite;
-pub use async_write::AsyncWriteExt;
-
-mod read_write;
-pub(crate) use read_write::{ReadFut, WriteFut};
-
-mod token_trait;
-pub use token_trait::TokenBearer;
+mod io_futures;
+pub(crate) use io_futures::*;
