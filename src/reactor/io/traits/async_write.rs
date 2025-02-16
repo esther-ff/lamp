@@ -1,6 +1,5 @@
 use crate::io::TokenBearer;
-use crate::io::WriteFut;
-
+use crate::io::{FlushFut, WriteFut};
 use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -44,6 +43,13 @@ pub trait AsyncWriteExt: AsyncWrite {
         Self: Unpin + AsyncWrite + TokenBearer,
     {
         WriteFut::new(self, buf, self.get_token())
+    }
+
+    fn flush(&'w mut self) -> FlushFut<'w, Self>
+    where
+        Self: Unpin + AsyncWrite + TokenBearer,
+    {
+        FlushFut::new(self, self.get_token())
     }
 }
 
