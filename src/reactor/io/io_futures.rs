@@ -75,7 +75,7 @@ impl<'w, IO: AsyncWrite + Unpin + ?Sized> WriteFut<'w, IO> {
 
 pin_project! {
     /// Future representing an asynchronous flush.
-    pub(crate) struct FlushFut<'f, IO: ?Sized> {
+    pub struct FlushFut<'f, IO: ?Sized> {
         io: &'f mut IO,
         token: Token,
         _pin: PhantomPinned,
