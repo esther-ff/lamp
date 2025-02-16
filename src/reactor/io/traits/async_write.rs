@@ -45,7 +45,7 @@ pub trait AsyncWriteExt: AsyncWrite {
         WriteFut::new(self, buf, self.get_token())
     }
 
-    fn flush(&'w mut self) -> FlushFut<'w, Self>
+    fn flush<'w>(&'w mut self) -> FlushFut<'w, Self>
     where
         Self: Unpin + AsyncWrite + TokenBearer,
     {
