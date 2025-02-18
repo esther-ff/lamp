@@ -21,10 +21,17 @@ impl WakerBox {
         };
 
         match target.get(self.index) {
-            None => target.push(waker.clone()),
+            None => {
+                target.push(waker.clone());
+                debug!("waker put into wakerbox");
+            }
             Some(orig_waker) => {
                 if !orig_waker.will_wake(waker) {
                     target[self.index] = waker.clone();
+
+                    debug!("waker put into wakerbox");
+                } else {
+                    debug!("dupe waker found");
                 }
             }
         }
@@ -38,14 +45,21 @@ impl WakerBox {
             Direction::Write => &mut self.writers,
         };
 
+        debug!("waking {} wakers for direction: {:#?}", target.len(), dir);
         target.drain(..).for_each(|waker| waker.wake_by_ref());
+        self.index = 0;
     }
 
     pub(crate) fn wake_all_no_dir(&mut self) {
+        debug!(
+            "waking up all {} wakers",
+            self.readers.len() + self.writers.len()
+        );
         let readers = self.readers.drain(..);
         let writers = self.writers.drain(..);
 
         readers.chain(writers).for_each(|waker| waker.wake_by_ref());
+        self.index = 0;
     }
 
     fn has_wakers(&self) -> bool {

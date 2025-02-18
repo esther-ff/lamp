@@ -1,6 +1,5 @@
 use crate::io::ReadFut;
 use crate::io::TokenBearer;
-use mio::Token;
 use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};

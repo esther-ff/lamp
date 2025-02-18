@@ -7,7 +7,6 @@ use std::pin::Pin;
 use std::ptr::NonNull;
 use std::task::{Context, Poll, Waker};
 
-use log::{info, warn};
 
 #[derive(Copy, Clone)]
 pub(crate) struct Mantle<F: Future + Send + 'static> {

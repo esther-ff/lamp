@@ -3,7 +3,7 @@ use super::note::Note;
 use super::vtable::{Vtable, vtable};
 use super::waker;
 
-use log::{info, warn};
+use log::warn;
 
 use std::cell::UnsafeCell;
 use std::future::Future;

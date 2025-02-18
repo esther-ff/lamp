@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use log::{info, warn};
+use log::warn;
 pub struct TaskHandle<T> {
     raw: RawTask,
     _t: PhantomData<T>,

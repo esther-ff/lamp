@@ -7,14 +7,26 @@ use std::io::Result as IoResult;
 use std::sync::{Arc, Mutex};
 use std::task::Context;
 use std::thread;
+use std::fmt;
 
 use slab::Slab;
+
+use log::debug;
 
 const SHUTDOWN: Token = Token(usize::MAX);
 /// represents the interest of the underlying io.
 pub enum Direction {
     Read,
     Write,
+}
+
+impl fmt::Debug for Direction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Direction::Read => write!(f, "Direction::Read"),
+            Direction::Write => write!(f, "Direction::Write")
+        }
+    }
 }
 
 /// Represents the global I/O Reactor.
@@ -44,6 +56,7 @@ pub struct Handle {
 }
 
 impl Handle {
+    #[allow(dead_code)]
     pub(crate) fn registry(&self) -> &Registry {
         &self.registry
     }
@@ -101,9 +114,12 @@ impl Reactor {
                     }
 
                     for event in events.iter() {
-
+                        debug!("event: {{ token: {}, readable: {}, writable: {}, error: {} }}", 
+                        event.token().0, event.is_readable(), event.is_writable(), event.is_error());
+                    
                         match event.token() {
                             SHUTDOWN => {
+                                debug!("shutting down reactor");
                                 return;
                             }
 
@@ -130,11 +146,6 @@ impl Reactor {
         Ok(handle)
     }
 
-    /// Obtains handle from a reactor.
-    pub fn get_handle(&self) -> Arc<Handle> {
-        self.handle.clone()
-    }
-
     /// Registers a IO source in the reactor.
     pub fn register(&self, src: &mut impl Source, interest: Interest) -> IoResult<usize> {
         let mut sources = self.sources.lock().expect("failed source lock");
@@ -159,24 +170,7 @@ impl Reactor {
             None => panic!("Trying to attach waker to an unregistered source!"),
         };
 
-        // match dir {
-        //     Direction::Read => {
-        //         let cur_waker = src.get_read_waker();
-        //         match cur_waker {
-        //             None => src.change_read_waker(cx.waker()),
-        //             Some(waker) => {
-        //                 if !waker.will_wake(cx.waker()) {
-        //                     src.change_read_waker(cx.waker());
-        //                 }
-        //             }
-        //         }
-        //     }
-        //     Direction::Write => src.change_write_waker(cx.waker()),
-        // }
-
         src.put(cx.waker(), dir);
         drop(sources);
     }
-
-    fn turn(&self) {}
 }
