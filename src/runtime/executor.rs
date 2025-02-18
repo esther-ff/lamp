@@ -2,10 +2,11 @@ use crate::reactor::{Handle, Reactor};
 use crate::task::handle::TaskHandle;
 use crate::task::note::Note;
 use crate::task::task::Task;
-use log::info;
+use log::{error, info};
 use slab::Slab;
 use std::cell::{Cell, UnsafeCell};
 use std::mem::MaybeUninit;
+use std::panic;
 use std::ptr::addr_of_mut;
 use std::sync::{Arc, OnceLock, RwLock, Weak, atomic::AtomicBool, atomic::Ordering, mpsc};
 use std::thread::JoinHandle;
@@ -71,6 +72,12 @@ impl ExecutorHandle {
     }
 }
 
+pub enum RtState {
+    Good,
+    MainTaskPanicked,
+    Abnormal,
+}
+
 pub struct Executor {
     /// Handle to the Executor,
     handle: Arc<ExecutorHandle>,
@@ -133,7 +140,7 @@ impl Executor {
         )
     }
 
-    pub fn block_on<F>(&mut self, f: F)
+    pub fn block_on<F>(&mut self, f: F) -> Result<(), RtState>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
@@ -142,14 +149,35 @@ impl Executor {
 
         let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
 
+        let mut state = RtState::Good;
+
         loop {
-            let ready = task.poll();
+            let out = panic::catch_unwind(|| task.poll());
+
+            let ready = match out {
+                // As the `Err` can contain the panic payload
+                // we ignore it.
+                Err(_) => {
+                    error!("main task panicked");
+                    state = RtState::MainTaskPanicked;
+                    break;
+                }
+
+                Ok(ready) => ready,
+            };
 
             if ready {
                 break;
-            } else {
-                let _ = exec.chan.r.recv();
-            }
+            };
+
+            let n = exec.chan.r.recv().expect("receiver failed at block_on");
+            info!("woke up thread, notif id: {}", n.0);
+        }
+
+        match state {
+            RtState::Good => Ok(()),
+            RtState::MainTaskPanicked => Err(RtState::MainTaskPanicked),
+            RtState::Abnormal => Err(RtState::Abnormal),
         }
     }
 

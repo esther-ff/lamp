@@ -85,6 +85,19 @@ impl TcpStream {
             token: Token(result?),
         })
     }
+
+    pub fn from_std(tcp: std::net::TcpStream) -> io::Result<Self> {
+        tcp.set_nonblocking(true)?;
+        let mut sock = mio::net::TcpStream::from_std(tcp);
+        let handle = Executor::get();
+        let result =
+            handle.reactor_fn(|r| r.register(&mut sock, Interest::READABLE | Interest::WRITABLE));
+
+        Ok(Self {
+            io: sock,
+            token: Token(result?),
+        })
+    }
 }
 
 impl TokenBearer for TcpStream {

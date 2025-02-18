@@ -1,4 +1,4 @@
-use super::IoSource;
+use crate::io::IoSource;
 
 use mio::event::Source;
 use mio::{Events, Interest, Poll, Registry, Token};
@@ -85,7 +85,7 @@ impl Reactor {
     pub fn start(&self) -> IoResult<thread::JoinHandle<()>> {
         // Polling thread
         let arc_events = Arc::clone(&self.events);
-        let arc_sources = Arc::clone(&self.sources);
+        let arc_sources: Arc<Mutex<Slab<IoSource>>> = Arc::clone(&self.sources);
         let handle = Arc::clone(&self.handle);
 
         let handle = thread::Builder::new()
@@ -97,11 +97,10 @@ impl Reactor {
                 loop {
                     match poll.poll(&mut events, None) {
                         Ok(_) => {}
-                        Err(e) => panic!("Error: {:?}", e),
+                        Err(e) => panic!("{}", e),
                     }
 
                     for event in events.iter() {
-                        println!("{:?}", event);
 
                         match event.token() {
                             SHUTDOWN => {
@@ -175,11 +174,7 @@ impl Reactor {
         //     Direction::Write => src.change_write_waker(cx.waker()),
         // }
 
-        match dir {
-            Direction::Read => src.put_read_waker(cx.waker()),
-            Direction::Write => src.put_write_waker(cx.waker()),
-        }
-
+        src.put(cx.waker(), dir);
         drop(sources);
     }
 

@@ -1,52 +1,92 @@
+use crate::reactor::reactor::Direction;
+use log::debug;
 use mio::Token;
 use mio::event::Event;
 use std::task::Waker;
 
+const WAKER_AMNT: usize = 64;
+
+/// Contains wakers.
+pub struct WakerBox {
+    readers: Vec<Waker>,
+    writers: Vec<Waker>,
+    index: usize,
+}
+
+impl WakerBox {
+    pub(crate) fn put(&mut self, waker: &Waker, dir: Direction) {
+        let target = match dir {
+            Direction::Read => &mut self.readers,
+            Direction::Write => &mut self.writers,
+        };
+
+        match target.get(self.index) {
+            None => target.push(waker.clone()),
+            Some(orig_waker) => {
+                if !orig_waker.will_wake(waker) {
+                    target[self.index] = waker.clone();
+                }
+            }
+        }
+
+        self.index += 1;
+    }
+
+    pub(crate) fn wake_all(&mut self, dir: Direction) {
+        let target = match dir {
+            Direction::Read => &mut self.readers,
+            Direction::Write => &mut self.writers,
+        };
+
+        target.drain(..).for_each(|waker| waker.wake_by_ref());
+    }
+
+    pub(crate) fn wake_all_no_dir(&mut self) {
+        let readers = self.readers.drain(..);
+        let writers = self.writers.drain(..);
+
+        readers.chain(writers).for_each(|waker| waker.wake_by_ref());
+    }
+
+    fn has_wakers(&self) -> bool {
+        self.readers.len() > 0 || self.writers.len() > 0
+    }
+}
+
 /// Represents a connection between a waker and the reactor
 pub struct IoSource {
-    read_waker: Option<Waker>,
-    write_waker: Option<Waker>,
+    wakers: WakerBox,
     token: Token,
 }
 
 impl IoSource {
     pub fn new(token: usize) -> IoSource {
         IoSource {
-            read_waker: None,
-            write_waker: None,
+            wakers: WakerBox {
+                readers: Vec::with_capacity(WAKER_AMNT),
+                writers: Vec::with_capacity(WAKER_AMNT),
+                index: 0,
+            },
             token: Token(token),
         }
     }
 
     pub fn has_wakers(&self) -> bool {
-        self.read_waker.is_some() || self.write_waker.is_some()
+        self.wakers.has_wakers()
     }
 
-    pub fn wake_with_event(&self, ev: &Event) {
-        if let (true, Some(waker)) = (ev.is_readable(), &self.read_waker) {
-            waker.wake_by_ref();
-        }
+    pub fn wake_with_event(&mut self, ev: &Event) {
+        match (ev.is_readable(), ev.is_writable()) {
+            (true, false) => self.wakers.wake_all(Direction::Read),
+            (false, true) => self.wakers.wake_all(Direction::Write),
+            (true, true) => self.wakers.wake_all_no_dir(),
 
-        if let (true, Some(waker)) = (ev.is_writable(), &self.write_waker) {
-            waker.wake_by_ref();
+            (..) => debug!("non readable and non writable event"),
         }
-
         // todo: handle closing and stuff
     }
 
-    pub fn change_read_waker(&mut self, waker: &Waker) {
-        self.read_waker = Some(waker.clone())
-    }
-
-    pub fn change_write_waker(&mut self, waker: &Waker) {
-        self.write_waker = Some(waker.clone())
-    }
-
-    pub fn get_read_waker(&self) -> &Option<Waker> {
-        &self.read_waker
-    }
-
-    pub fn get_write_waker(&self) -> &Option<Waker> {
-        &self.write_waker
+    pub(crate) fn put(&mut self, waker: &Waker, dir: Direction) {
+        self.wakers.put(waker, dir)
     }
 }

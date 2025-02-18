@@ -3,7 +3,7 @@ use log::{error, info, warn};
 use slab::Slab;
 use std::cell::Cell;
 use std::fmt::{self, Debug, Formatter};
-use std::io::{self, Seek};
+use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Weak, atomic, atomic::Ordering, mpsc};
 use std::thread::{self, available_parallelism};
@@ -94,6 +94,7 @@ impl<T: Send + 'static> WorkerThread<T> {
 
     /// Rebuilds the thread.
     // TODO: make it use `&self`
+    #[allow(dead_code)]
     pub(crate) fn rebuild(&mut self) {
         let (sender, receiver) = mpsc::channel();
         let clone = Arc::clone(&self.occupied);
@@ -111,6 +112,9 @@ impl<T: Send + 'static> WorkerThread<T> {
 
 pub(crate) struct ThreadPool<Notif: Send + 'static> {
     workers: Slab<WorkerThread<Notif>>,
+
+    // Will be maybe used later
+    #[allow(dead_code)]
     occupied: Slab<WorkerThread<Notif>>,
     pub(crate) amount: usize,
 }
@@ -120,25 +124,34 @@ impl<Notif: Send + 'static + Copy> ThreadPool<Notif> {
     /// Copies the argument.
     pub(crate) fn broadcast(&self, notif: Notif) {
         self.workers.iter().for_each(|(_, thread)| {
-            thread.push(notif);
+            // ignoring the results
+            // but logging them.
+            let res = thread.push(notif);
+            if res.is_err() {
+                warn!("failed broadcast, err: {:#?}", res);
+            }
         })
     }
 }
 
-impl<Notif: Send + 'static + Clone> ThreadPool<Notif> {
-    /// Broadcasts a message to each worker.
-    /// Clones the argument.
-    pub(crate) fn broadcast_clone(&self, notif: Notif) {
-        self.workers.iter().for_each(|(_, thread)| {
-            thread.push(notif.clone());
-        })
-    }
-}
+// impl<Notif: Send + 'static + Clone> ThreadPool<Notif> {
+//     /// Broadcasts a message to each worker.
+//     /// Clones the argument.
+//     pub(crate) fn broadcast_clone(&self, notif: Notif) {
+//         self.workers.iter().for_each(|(_, thread)| {
+//             // we ignore the results for now.
+//             let _ = thread.push(notif.clone());
+//         })
+//     }
+// }
 
 impl<Notif: Send + 'static> ThreadPool<Notif> {
     pub(crate) fn new(amount: usize) -> Self {
-        // let cores = available_parallelism().expect("failed to check cpu thread count");
-        // assert!(amount <= cores.into());
+        #[cfg(not(miri))]
+        {
+            let cores = available_parallelism().expect("failed to check cpu thread count");
+            assert!(amount <= cores.into());
+        }
 
         Self {
             workers: Slab::with_capacity(amount),
