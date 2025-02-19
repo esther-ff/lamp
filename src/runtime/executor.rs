@@ -157,9 +157,14 @@ impl Executor {
             let ready = match out {
                 // As the `Err` can contain the panic payload
                 // we ignore it.
-                Err(_) => {
+                // with debug assertions, we will attempt to `dbg!` it.
+                Err(_err) => {
                     error!("main task panicked");
                     state = RtState::MainTaskPanicked;
+
+                    #[cfg(debug_assertions)]
+                    let _ = dbg!(_err.downcast::<String>());
+
                     break;
                 }
 

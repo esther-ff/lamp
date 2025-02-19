@@ -108,10 +108,14 @@ impl Reactor {
                 let mut events = arc_events.lock().expect("event lock fail");
 
                 loop {
+                    debug!("polling for events");
+                    
                     match poll.poll(&mut events, None) {
                         Ok(_) => {}
                         Err(e) => panic!("{}", e),
                     }
+
+                    debug!("got io events");
 
                     for event in events.iter() {
                         debug!("event: {{ token: {}, readable: {}, writable: {}, error: {} }}", 
