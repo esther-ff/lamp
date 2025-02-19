@@ -194,8 +194,6 @@ impl Executor {
             let _ = pool.join();
         });
 
-        dbg!(Arc::strong_count(&self.handle));
-
         unsafe { self.reactor_handle.assume_init_drop() };
     }
 
@@ -213,8 +211,6 @@ impl Executor {
         let (task, note, handle) = Task::new(f, num as u64, exec.chan.s.clone());
         storage.insert(task);
         drop(storage);
-
-        info!("registered task with id: {}", &note.0);
 
         // If it fails, something terrible happened.
         exec.pool_fn(|pool| pool.deploy(note))

@@ -2,84 +2,122 @@ use crate::reactor::reactor::Direction;
 use log::debug;
 use mio::Token;
 use mio::event::Event;
+use std::panic;
 use std::task::Waker;
 
-const WAKER_AMNT: usize = 64;
+use log::error;
+use std::mem::MaybeUninit;
 
-/// Contains wakers.
-pub struct WakerBox {
-    readers: Vec<Waker>,
-    writers: Vec<Waker>,
-    index: usize,
+const WAKER_AMNT: usize = 64;
+struct WakerList {
+    blk: [MaybeUninit<Waker>; WAKER_AMNT],
+    cursor: usize,
 }
 
-impl WakerBox {
+impl WakerList {
+    fn new() -> Self {
+        WakerList {
+            blk: [const { MaybeUninit::uninit() }; WAKER_AMNT],
+            cursor: 0,
+        }
+    }
+
+    fn wake_all(&mut self) {
+        while self.cursor != 0 {
+            let uninit = &mut self.blk[self.cursor];
+
+            unsafe {
+                let waker = uninit.assume_init_mut();
+                let res = panic::catch_unwind(|| waker.wake_by_ref());
+                if res.is_err() {
+                    error!("panic while waking up waker.")
+                }
+                uninit.assume_init_drop();
+            };
+
+            self.cursor -= 1;
+        }
+    }
+
+    fn put(&mut self, waker: Waker) {
+        self.cursor += 1;
+        self.blk[self.cursor].write(waker);
+    }
+
+    fn full(&self) -> bool {
+        self.cursor == WAKER_AMNT
+    }
+
+    fn elements(&self) -> usize {
+        self.cursor
+    }
+}
+
+/// Contains wakers.
+pub struct Wakers {
+    rd: WakerList,
+    wr: WakerList,
+}
+
+impl Wakers {
     pub(crate) fn put(&mut self, waker: &Waker, dir: Direction) {
-        let target = match dir {
-            Direction::Read => &mut self.readers,
-            Direction::Write => &mut self.writers,
+        let list = match dir {
+            Direction::Read => &mut self.rd,
+            Direction::Write => &mut self.wr,
         };
 
-        match target.get(self.index) {
-            None => {
-                target.push(waker.clone());
-                debug!("waker put into wakerbox");
-            }
-            Some(orig_waker) => {
-                if !orig_waker.will_wake(waker) {
-                    target[self.index] = waker.clone();
-
-                    debug!("waker put into wakerbox");
-                } else {
-                    debug!("dupe waker found");
-                }
-            }
-        }
-
-        self.index += 1;
+        list.put(waker.clone())
     }
 
     pub(crate) fn wake_all(&mut self, dir: Direction) {
-        let target = match dir {
-            Direction::Read => &mut self.readers,
-            Direction::Write => &mut self.writers,
+        if !self.has_wakers() {
+            return;
         };
 
-        debug!("waking {} wakers for direction: {:#?}", target.len(), dir);
-        target.drain(..).for_each(|waker| waker.wake_by_ref());
-        self.index = 0;
+        let target = match dir {
+            Direction::Read => &mut self.rd,
+            Direction::Write => &mut self.wr,
+        };
+
+        debug!(
+            "waking {} wakers for direction: {:#?}",
+            target.elements(),
+            dir
+        );
+        target.wake_all();
     }
 
     pub(crate) fn wake_all_no_dir(&mut self) {
+        if !self.has_wakers() {
+            return;
+        };
+
         debug!(
             "waking up all {} wakers",
-            self.readers.len() + self.writers.len()
+            self.rd.elements() + self.wr.elements()
         );
-        let readers = self.readers.drain(..);
-        let writers = self.writers.drain(..);
 
-        readers.chain(writers).for_each(|waker| waker.wake_by_ref());
-        self.index = 0;
+        self.rd.wake_all();
+        self.wr.wake_all();
     }
 
     fn has_wakers(&self) -> bool {
-        self.readers.len() > 0 || self.writers.len() > 0
+        self.rd.elements() > 0 || self.wr.elements() > 0
     }
 }
 
 /// Represents a connection between a waker and the reactor
 pub struct IoSource {
-    wakers: WakerBox,
+    wakers: Wakers,
     token: Token,
 }
 
 impl IoSource {
     pub fn new(token: usize) -> IoSource {
         IoSource {
-            wakers: WakerBox {
-                readers: Vec::with_capacity(WAKER_AMNT),
-                writers: Vec::with_capacity(WAKER_AMNT),
-                index: 0,
+            wakers: Wakers {
+                rd: WakerList::new(),
+                wr: WakerList::new(),
             },
             token: Token(token),
         }

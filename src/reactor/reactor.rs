@@ -11,7 +11,7 @@ use std::fmt;
 
 use slab::Slab;
 
-use log::debug;
+use log::{debug, trace};
 
 const SHUTDOWN: Token = Token(usize::MAX);
 /// represents the interest of the underlying io.
@@ -108,14 +108,14 @@ impl Reactor {
                 let mut events = arc_events.lock().expect("event lock fail");
 
                 loop {
-                    debug!("polling for events");
-                    
+                    trace!("polling for events");
+
                     match poll.poll(&mut events, None) {
                         Ok(_) => {}
                         Err(e) => panic!("{}", e),
                     }
 
-                    debug!("got io events");
+                    trace!("got io events");
 
                     for event in events.iter() {
                         debug!("event: {{ token: {}, readable: {}, writable: {}, error: {} }}", 
@@ -123,7 +123,7 @@ impl Reactor {
                     
                         match event.token() {
                             SHUTDOWN => {
-                                debug!("shutting down reactor");
+                                trace!("shutting down reactor");
                                 return;
                             }
 
