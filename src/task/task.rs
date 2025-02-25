@@ -21,19 +21,32 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new<F: Future + Send + 'static>(
+    pub(crate) fn new<F: Future + Send + 'static>(
         f: F,
         id: u64,
         sender: Sender<Note>,
     ) -> (Task, Note, TaskHandle<F::Output>) {
         let raw = RawTask::new(f, sender, id);
-        warn!("Incremented in Task::new!");
+        //warn!("Incremented in Task::new!");
         raw.ref_inc();
         let waker = waker::make_waker(raw.ptr);
 
         raw.set_waker(Some(waker));
 
         (Task { raw }, Note(id), TaskHandle::new(raw))
+    }
+
+    pub(crate) fn new_alone<F: Future + Send + 'static>(
+        f: F,
+        id: u64,
+        sender: Sender<Note>,
+    ) -> Task {
+        let raw = RawTask::new(f, sender, id);
+        let waker = waker::make_waker(raw.ptr);
+
+        raw.set_waker(Some(waker));
+
+        Task { raw }
     }
 
     pub(crate) fn poll(&self) -> bool {
@@ -199,6 +212,11 @@ impl RawTask {
         if self.ref_dec() == 0 {
             self.destroy();
         }
+    }
+
+    /// Obtains the pointer inside.
+    pub(crate) fn get_ptr(self) -> NonNull<Header> {
+        self.ptr
     }
 
     /// Creates a raw task from a pointer

@@ -147,7 +147,7 @@ impl Executor {
     {
         let exec = Executor::get();
 
-        let (task, _, _) = Task::new(f, u64::MAX - 1, exec.chan.s.clone());
+        let task = Task::new_alone(f, u64::MAX - 1, exec.chan.s.clone());
 
         let mut state = RtState::Good;
 

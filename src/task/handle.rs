@@ -1,4 +1,5 @@
 use super::task::RawTask;
+use super::waker::make_waker;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -21,7 +22,13 @@ impl<T> TaskHandle<T> {
     }
 }
 
-impl<T: std::fmt::Debug> Future for TaskHandle<T> {
+impl<T> TaskHandle<T> {
+    pub unsafe fn expose_waker(self) -> std::task::Waker {
+        make_waker(self.raw.get_ptr())
+    }
+}
+
+impl<T> Future for TaskHandle<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
