@@ -14,9 +14,7 @@ use std::thread_local;
 
 use super::threads::ThreadPool;
 
-thread_local! {
-    static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
-}
+static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
 
 struct ChannelPair<T> {
     s: mpsc::Sender<T>,
@@ -64,7 +62,7 @@ impl ExecutorHandle {
         f(&self.reactor)
     }
 
-    pub(crate) fn pool_fn<F, T>(self: Arc<Self>, function: F) -> T
+    pub(crate) fn pool_fn<F, T>(self: &Arc<Self>, function: F) -> T
     where
         F: FnOnce(&ThreadPool<Note>) -> T,
     {
@@ -107,10 +105,8 @@ impl Executor {
 
     pub fn new(amnt: usize) -> Executor {
         let mut runtime = Executor::new_base(amnt);
-        EXEC.with(|cell| {
-            cell.set(Arc::downgrade(&runtime.handle))
-                .expect("failed setting global handle");
-        });
+        EXEC.set(Arc::downgrade(&runtime.handle))
+            .expect("failed setting global handle");
 
         unsafe {
             let amnt = (*runtime.handle.pool.get()).amount;
@@ -131,13 +127,12 @@ impl Executor {
         runtime
     }
 
+    #[inline]
     pub fn get() -> Arc<ExecutorHandle> {
-        EXEC.with(
-            |cell| match cell.get().expect("runtime is not running").upgrade() {
-                None => panic!("runtime is gone"),
-                Some(handle) => handle,
-            },
-        )
+        match EXEC.get().expect("runtime is not running").upgrade() {
+            None => panic!("runtime is gone"),
+            Some(handle) => handle,
+        }
     }
 
     pub fn block_on<F>(&mut self, f: F) -> Result<(), RtState>
@@ -176,6 +171,14 @@ impl Executor {
             };
 
             let n = exec.chan.r.recv().expect("receiver failed at block_on");
+
+            if n.0 != u64::MAX - 1 {
+                self.handle.pool_fn(|pool| {
+                    let _ = pool.deploy(n);
+
+                    exec.chan.r.recv().expect("receiver failed at block_on");
+                })
+            }
             info!("woke up thread, notif id: {}", n.0);
         }
 
