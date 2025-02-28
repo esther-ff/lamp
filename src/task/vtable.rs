@@ -70,11 +70,15 @@ fn ref_dec(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_sub(1, Ordering::SeqCst) };
 
     let _id = unsafe { (*ptr.as_ptr()).id };
-    output - 1
+    let val = output - 1;
+    log::warn!("ref count decrement! value: {val} id: {_id}");
+    val
 }
 fn ref_inc(ptr: Ptr) -> u8 {
     let output = unsafe { (*ptr.as_ptr()).refs.fetch_add(1, Ordering::SeqCst) };
 
     let _id = unsafe { (*ptr.as_ptr()).id };
-    output + 1
+    let val = output + 1;
+    log::warn!("ref count increment! value: {val} id: {_id}");
+    val
 }

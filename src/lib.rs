@@ -35,6 +35,7 @@ mod tests {
         log::set_logger(logger).map(|()| log::set_max_level(log::LevelFilter::Info))
     }
 
+    #[cfg(not(miri))]
     fn test_tcp_server() -> std::thread::JoinHandle<u8> {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -58,7 +59,7 @@ mod tests {
         log_init(&LOG).unwrap();
 
         let mut exec = Executor::new(2);
-        exec.block_on(async {
+        let res = exec.block_on(async {
             let h1 = Executor::spawn(async {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 println!("async task: hello after 500 ms!");
@@ -72,16 +73,19 @@ mod tests {
         });
 
         exec.shutdown();
+
+        assert!(res.is_ok(), "runtime shutdown abruptly due to an error")
     }
+
     #[test]
+    #[cfg(not(miri))]
     fn read_write_network() {
         use crate::io::{AsyncReadExt, AsyncWriteExt};
-        //static LOG: Logger = Logger;
 
-        //log_init(&LOG).unwrap();
         let handle = test_tcp_server();
         let mut exec = Executor::new(4);
-        exec.block_on(async move {
+
+        let res = exec.block_on(async move {
             let mut stream = io::TcpStream::new("127.0.0.1:8011").unwrap();
             let mut buf: [u8; 1] = [0u8; 1];
             stream.read(&mut buf).await.unwrap();
@@ -95,5 +99,6 @@ mod tests {
         });
 
         exec.shutdown();
+        assert!(res.is_ok(), "runtime shutdown abruptly due to an error");
     }
 }

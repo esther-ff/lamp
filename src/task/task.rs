@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::Sender;
 use std::task::{Poll, Waker};
 
-static REF_COUNT_BASE: u8 = 0;
+static REF_COUNT_BASE: u8 = 1;
 
 /// Owned task struct.
 pub struct Task {
@@ -27,8 +27,6 @@ impl Task {
         sender: Sender<Note>,
     ) -> (Task, Note, TaskHandle<F::Output>) {
         let raw = RawTask::new(f, sender, id);
-        //warn!("Incremented in Task::new!");
-        raw.ref_inc();
         let waker = waker::make_waker(raw.ptr);
 
         raw.set_waker(Some(waker));

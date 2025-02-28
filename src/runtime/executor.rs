@@ -14,7 +14,11 @@ use std::thread_local;
 
 use super::threads::ThreadPool;
 
-static EXEC: OnceLock<Weak<ExecutorHandle>> = OnceLock::new();
+use super::cx_box::CxBox;
+
+thread_local! {
+    static EXEC: CxBox<Weak<ExecutorHandle>> = CxBox::new();
+}
 
 struct ChannelPair<T> {
     s: mpsc::Sender<T>,
@@ -105,8 +109,10 @@ impl Executor {
 
     pub fn new(amnt: usize) -> Executor {
         let mut runtime = Executor::new_base(amnt);
-        EXEC.set(Arc::downgrade(&runtime.handle))
-            .expect("failed setting global handle");
+        EXEC.with(|cell| {
+            cell.set(Arc::downgrade(&runtime.handle))
+                .expect("failed setting global handle")
+        });
 
         unsafe {
             let amnt = (*runtime.handle.pool.get()).amount;
@@ -129,10 +135,12 @@ impl Executor {
 
     #[inline]
     pub fn get() -> Arc<ExecutorHandle> {
-        match EXEC.get().expect("runtime is not running").upgrade() {
-            None => panic!("runtime is gone"),
-            Some(handle) => handle,
-        }
+        EXEC.with(
+            |cell| match cell.get_ref().expect("runtime is not running").upgrade() {
+                None => panic!("runtime is gone"),
+                Some(handle) => handle,
+            },
+        )
     }
 
     pub fn block_on<F>(&mut self, f: F) -> Result<(), RtState>
@@ -170,16 +178,19 @@ impl Executor {
                 break;
             };
 
-            let n = exec.chan.r.recv().expect("receiver failed at block_on");
+            'inner: loop {
+                let n = exec.chan.r.recv().expect("receiver failed at block_on");
 
-            if n.0 != u64::MAX - 1 {
-                self.handle.pool_fn(|pool| {
-                    let _ = pool.deploy(n);
+                if n.0 != u64::MAX - 1 {
+                    self.handle.pool_fn(|pool| {
+                        let _ = pool.deploy(n);
+                    });
+                } else {
+                    break 'inner;
+                }
 
-                    exec.chan.r.recv().expect("receiver failed at block_on");
-                })
+                info!("woke up thread, notif id: {}", n.0);
             }
-            info!("woke up thread, notif id: {}", n.0);
         }
 
         match state {
@@ -197,10 +208,19 @@ impl Executor {
             let _ = pool.join();
         });
 
+        // Safety:
+        //
+        // Nobody has the handle as we have consumed the runtime.
         unsafe { self.reactor_handle.assume_init_drop() };
+
+        // Safety:
+        //
+        // Everything was shutdown, no other thread might accidentally execute this.
+        unsafe { EXEC.with(|c| c.clean()) };
     }
 
     /// Spawn a future onto the Runtime.
+    #[inline]
     pub fn spawn<F>(f: F) -> TaskHandle<F::Output>
     where
         F: Future + Send + 'static,

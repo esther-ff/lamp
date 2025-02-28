@@ -32,7 +32,7 @@ fn drop_fn(ptr: *const ()) {
     let raw = RawTask::from_ptr(ptr as *mut Header);
 
     // this should be replaced
-    warn!("Decremented in waker! (drop_fn)");
+    warn!("Decremented in waker! (drop_fn) ");
     raw.ref_destroy();
 }
 

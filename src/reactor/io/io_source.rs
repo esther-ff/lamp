@@ -30,7 +30,7 @@ impl WakerList {
                 let waker = uninit.assume_init_mut();
                 let res = panic::catch_unwind(|| waker.wake_by_ref());
                 if res.is_err() {
-                    error!("panic while waking up waker.")
+                    error!("panic while waking up waker (cur: {})", self.cursor)
                 }
                 uninit.assume_init_drop();
             };
