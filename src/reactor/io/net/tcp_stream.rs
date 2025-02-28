@@ -1,7 +1,7 @@
 use crate::io::TokenBearer;
 use crate::io::{AsyncRead, AsyncWrite};
 use crate::reactor::reactor::Direction;
-use crate::runtime::Executor;
+use crate::runtime::{Executor, ExecutorHandle};
 
 use mio::Interest;
 use mio::Token;
@@ -12,13 +12,14 @@ use mio::net;
 
 use std::io::{self, Read, Write};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 macro_rules! handle_async_read {
-    ($io: expr, $buf: expr, $cx: expr, $token: expr) => {
+    ($io: expr, $buf: expr, $cx: expr, $token: expr, $handle: expr) => {
         match (&$io).read($buf) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Read));
+                $handle.reactor_fn(|r| r.attach_waker($cx, $token, Direction::Read));
                 Poll::Pending
             }
             Err(e) => Poll::Ready(Err(e)),
@@ -28,10 +29,10 @@ macro_rules! handle_async_read {
 }
 
 macro_rules! handle_async_write {
-    ($io: expr, $buf: expr, $cx: expr, $token: expr) => {
+    ($io: expr, $buf: expr, $cx: expr, $token: expr, $handle: expr) => {
         match (&$io).write($buf) {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
+                $handle.reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
                 Poll::Pending
             }
             Err(e) => Poll::Ready(Err(e)),
@@ -41,10 +42,10 @@ macro_rules! handle_async_write {
 }
 
 macro_rules! handle_async_flush {
-    ($io: expr, $cx: expr, $token: expr) => {
+    ($io: expr, $cx: expr, $token: expr, $handle: expr) => {
         match (&$io).flush() {
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Executor::get().reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
+                $handle.reactor_fn(|r| r.attach_waker($cx, $token, Direction::Write));
                 Poll::Pending
             }
 
@@ -57,6 +58,7 @@ macro_rules! handle_async_flush {
 /// TCP Socket connected to a listener.
 pub struct TcpStream {
     io: mio::net::TcpStream,
+    handle: Arc<ExecutorHandle>,
     pub(crate) token: Token,
 }
 
@@ -82,6 +84,7 @@ impl TcpStream {
 
         Ok(Self {
             io: tcp,
+            handle,
             token: Token(result?),
         })
     }
@@ -95,6 +98,7 @@ impl TcpStream {
 
         Ok(Self {
             io: sock,
+            handle,
             token: Token(result?),
         })
     }
@@ -114,7 +118,7 @@ impl AsyncRead for TcpStream {
         cx: &mut Context<'_>,
         buf: &'a mut [u8],
     ) -> Poll<io::Result<usize>> {
-        handle_async_read!(self.io, buf, cx, self.token)
+        handle_async_read!(self.io, buf, cx, self.token, self.handle)
     }
 }
 
@@ -126,7 +130,7 @@ impl AsyncRead for &TcpStream {
         cx: &mut Context<'_>,
         buf: &'a mut [u8],
     ) -> Poll<io::Result<usize>> {
-        handle_async_read!(self.io, buf, cx, self.token)
+        handle_async_read!(self.io, buf, cx, self.token, self.handle)
     }
 }
 
@@ -136,11 +140,11 @@ impl AsyncWrite for TcpStream {
         cx: &mut Context<'_>,
         buf: &'w [u8],
     ) -> Poll<io::Result<usize>> {
-        handle_async_write!(self.io, buf, cx, self.token)
+        handle_async_write!(self.io, buf, cx, self.token, self.handle)
     }
 
     fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        handle_async_flush!(self.io, cx, self.token)
+        handle_async_flush!(self.io, cx, self.token, self.handle)
     }
 }
 
@@ -150,11 +154,11 @@ impl AsyncWrite for &TcpStream {
         cx: &mut Context<'_>,
         buf: &'w [u8],
     ) -> Poll<io::Result<usize>> {
-        handle_async_write!(self.io, buf, cx, self.token)
+        handle_async_write!(self.io, buf, cx, self.token, self.handle)
     }
 
     fn poll_flush<'f>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        handle_async_flush!(self.io, cx, self.token)
+        handle_async_flush!(self.io, cx, self.token, self.handle)
     }
 }
 

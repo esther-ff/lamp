@@ -59,7 +59,7 @@ unsafe impl Sync for ExecutorHandle {}
 unsafe impl Send for ExecutorHandle {}
 
 impl ExecutorHandle {
-    pub(crate) fn reactor_fn<F, T>(self: Arc<Self>, f: F) -> T
+    pub(crate) fn reactor_fn<F, T>(self: &Arc<Self>, f: F) -> T
     where
         F: FnOnce(&Reactor) -> T,
     {
